@@ -532,11 +532,11 @@ def main():
 
     if model_args.debug_mode:
         if training_args.do_train:
-            train_dataset = train_dataset.shuffle(seed=42).select(range(100))
+            train_dataset = train_dataset.shuffle(seed=42).select(range(25))
         if training_args.do_eval:
-            eval_dataset = eval_dataset.shuffle(seed=42).select(range(100))
+            eval_dataset = eval_dataset.shuffle(seed=42).select(range(25))
         if training_args.do_predict:
-            predict_dataset = predict_dataset.shuffle(seed=42).select(range(100))
+            predict_dataset = predict_dataset.shuffle(seed=42).select(range(25))
 
     # Initialize our Trainer
     trainer = Seq2SeqTrainer(
@@ -603,10 +603,12 @@ def main():
 
         if trainer.is_world_process_zero():
             if training_args.predict_with_generate:
+                inputs = tokenizer.batch_decode(predict_dataset['input_ids'])
+                labels = tokenizer.batch_decode(predict_dataset['labels'])
                 predictions = tokenizer.batch_decode(
                     predict_results.predictions, skip_special_tokens=True, clean_up_tokenization_spaces=True
                 )
-                predictions = [pred.strip() for pred in predictions]
+                predictions = [f"Input: {input} ; label: {label} ; pred: {pred.strip()}" for input, label, pred in zip(inputs, labels, predictions)]
                 output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.txt")
                 with open(output_prediction_file, "w") as writer:
                     writer.write("\n".join(predictions))

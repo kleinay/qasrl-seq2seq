@@ -413,7 +413,7 @@ def main():
             f"`{model.__class__.__name__}`. This will lead to loss being calculated twice and will take up more memory"
         )
 
-    def preprocess_function(examples):
+    def preprocess_function__answers(examples):
         inputs = examples[text_column]
         questions = [" ".join(x) for x in examples['question']]
         targets = examples[summary_column]
@@ -435,6 +435,36 @@ def main():
 
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs
+
+    def preprocess_function__questions_answers(examples):
+        inputs = examples[text_column]
+        questions = [" ".join(x) for x in examples['question']]
+        targets = examples[summary_column]
+        # QA SRL can have multiple correct targets
+        new_targets = []
+        for question, target in zip(questions, targets):
+            new_target = " ; ".join(target) if isinstance(target, list) else target
+            new_target = f"{question} ~ {new_target}"
+            new_targets.append(new_target)
+        inputs = [prefix + inp for inp in inputs]
+        model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+
+        # Setup the tokenizer for targets
+        with tokenizer.as_target_tokenizer():
+            labels = tokenizer(new_targets, max_length=max_target_length, padding=padding, truncation=True)
+
+        # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
+        # padding in the loss.
+        if padding == "max_length" and data_args.ignore_pad_token_for_loss:
+            labels["input_ids"] = [
+                [(l if l != tokenizer.pad_token_id else -100) for l in label] for label in labels["input_ids"]
+            ]
+
+        model_inputs["labels"] = labels["input_ids"]
+        return model_inputs
+
+    # preprocess_function = preprocess_function__answers
+    preprocess_function = preprocess_function__questions_answers
 
     if training_args.do_train:
         if "train" not in raw_datasets:

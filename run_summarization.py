@@ -450,15 +450,23 @@ def main():
             any_row = x.iloc[0]
             return f"{any_row['input']}{tokenizer.additional_special_tokens[1]}{any_row['predicate']}"
 
-        def _extract_targets(x: pd.DataFrame) -> str:
+        def _extract_targets_all(x: pd.DataFrame) -> str:
             def _flatten_targets(targets: List[str]) -> str:
                 return f"{tokenizer.additional_special_tokens[0]}".join(targets)
 
             return f"{tokenizer.eos_token}".join([f"{q}{tokenizer.additional_special_tokens[2]}{_flatten_targets(t)}" for q, t in zip(x.question, x.target)])
 
+        def _extract_targets_single(x: pd.DataFrame) -> str:
+            def _flatten_targets(targets: List[str]) -> str:
+                return targets[0]
+
+            x = x.iloc[0]
+
+            return f"{tokenizer.eos_token}".join([f"{q}{tokenizer.additional_special_tokens[2]}{_flatten_targets(t)}" for q, t in zip([x.question], [x.target])])
+
         grouped_df = df.groupby(['input', 'predicate'])
         inputs = grouped_df.apply(_extract_inputs).tolist()
-        targets = grouped_df.apply(_extract_targets).tolist()
+        targets = grouped_df.apply(_extract_targets_single).tolist()
 
         inputs = [prefix + inp for inp in inputs]
         model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)

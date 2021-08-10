@@ -436,6 +436,33 @@ def main():
 
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs
+    
+    def preprocess_function__prev_questions_answers(examples):
+        inputs = examples[text_column]
+        questions = [" ".join(x) for x in examples['question']]
+        targets = examples[summary_column]
+        # QA SRL can have multiple correct targets
+        new_targets = []
+        for question, target in zip(questions, targets):
+            new_target = " ; ".join(target) if isinstance(target, list) else target
+            new_target = f"{question} ~ {new_target}"
+            new_targets.append(new_target)
+        inputs = [prefix + inp for inp in inputs]
+        model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+
+        # Setup the tokenizer for targets
+        with tokenizer.as_target_tokenizer():
+            labels = tokenizer(new_targets, max_length=max_target_length, padding=padding, truncation=True)
+
+        # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
+        # padding in the loss.
+        if padding == "max_length" and data_args.ignore_pad_token_for_loss:
+            labels["input_ids"] = [
+                [(l if l != tokenizer.pad_token_id else -100) for l in label] for label in labels["input_ids"]
+            ]
+
+        model_inputs["labels"] = labels["input_ids"]
+        return model_inputs    
 
     def preprocess_function__questions_answers(examples):
         inputs = examples[text_column]
@@ -448,8 +475,9 @@ def main():
         def _extract_inputs(x: pd.DataFrame) -> str:
             # all rows have the same index values because of the groupby
             any_row = x.iloc[0]
-            return f"{any_row['input']}{tokenizer.additional_special_tokens[1]}{any_row['predicate']}"
-
+#             return f"{any_row['input']}{tokenizer.additional_special_tokens[1]}{any_row['predicate']}"
+            return f"{any_row['input']}{tokenizer.eos_token}{any_row['predicate']}"
+        
         def _extract_targets_all(x: pd.DataFrame) -> str:
             def _flatten_targets(targets: List[str]) -> str:
                 return f"{tokenizer.additional_special_tokens[0]}".join(targets)
@@ -462,7 +490,8 @@ def main():
 
             x = x.iloc[0]
 
-            return f"{tokenizer.eos_token}".join([f"{q}{tokenizer.additional_special_tokens[2]}{_flatten_targets(t)}" for q, t in zip([x.question], [x.target])])
+#             return f"{tokenizer.eos_token}".join([f"{q}{tokenizer.additional_special_tokens[2]}{_flatten_targets(t)}" for q, t in zip([x.question], [x.target])])
+            return f"{tokenizer.eos_token}".join([f"{q}{tokenizer.eos_token}{_flatten_targets(t)}" for q, t in zip([x.question], [x.target])])      
 
         grouped_df = df.groupby(['input', 'predicate'])
         inputs = grouped_df.apply(_extract_inputs).tolist()
@@ -486,8 +515,9 @@ def main():
         return model_inputs
 
     # preprocess_function = preprocess_function__answers
-    preprocess_function = preprocess_function__questions_answers
-
+    preprocess_function = preprocess_function__prev_questions_answers
+#     preprocess_function = preprocess_function__questions_answers
+    
     if training_args.do_train:
         if "train" not in raw_datasets:
             raise ValueError("--do_train requires a train dataset")

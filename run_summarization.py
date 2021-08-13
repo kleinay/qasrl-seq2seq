@@ -17,7 +17,7 @@
 Fine-tuning the library models for sequence to sequence.
 """
 # You can also adapt this script on your own sequence to sequence task. Pointers for this are left as comments.
-
+import json
 import logging
 import os
 import sys
@@ -46,6 +46,7 @@ from transformers.file_utils import is_offline_mode
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
+# from evaluate import _to_qasrl_gs_arguments
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -76,6 +77,9 @@ class ModelArguments:
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
     debug_mode: bool = field(
+        default=False
+    )
+    do_predict_based_on_predictions_file: bool = field(
         default=False
     )
     config_name: Optional[str] = field(
@@ -716,10 +720,19 @@ def main():
                 predictions = tokenizer.batch_decode(
                     predict_results.predictions, skip_special_tokens=False, clean_up_tokenization_spaces=True
                 )
-                predictions = [f"Input: {input} ; label: {label} ; pred: {pred.replace(tokenizer.pad_token, '').strip()}" for input, label, pred in zip(inputs, labels, predictions)]
-                with open(output_prediction_file, "w") as writer:
-                    writer.write("\n".join(predictions))        
 
+                with open(output_prediction_file, "w") as f:
+                    f.write(json.dumps({"inputs": inputs, "labels": labels, "predictions": [x.replace(tokenizer.pad_token, "").strip() for x in predictions]}))
+                # predictions = [f"Input: {input} ; label: {label} ; pred: {pred.replace(tokenizer.pad_token, '').strip()}" for input, label, pred in zip(inputs, labels, predictions)]
+                # with open(output_prediction_file, "w") as writer:
+                #     writer.write("\n".join(predictions))
+
+    # For development - Easier to move the predictions file instead of the whole model
+    if model_args.do_predict_based_on_predictions_file:
+        with open(output_prediction_file, "r") as f:
+            predictions_dict = json.loads(f.read())
+
+        _to_qasrl_gs_arguments(predictions_dict['inputs'], predictions_dict['labels'], predictions_dict['predictions'])
 
     if training_args.push_to_hub:
         kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "summarization"}

@@ -46,10 +46,11 @@ from transformers.file_utils import is_offline_mode
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
-# from evaluate import _to_qasrl_gs_arguments
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
+from qasrl_gs.scripts.evaluate import evaluate
+
 check_min_version("4.10.0.dev0")
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/summarization/requirements.txt")
@@ -385,6 +386,8 @@ def main():
         column_names = raw_datasets["validation"].column_names
     elif training_args.do_predict:
         column_names = raw_datasets["test"].column_names
+    elif model_args.do_predict_based_on_predictions_file:
+        column_names = raw_datasets["test"].column_names
     else:
         logger.info("There is nothing to do. Please pass `do_train`, `do_eval` and/or `do_predict`.")
         return
@@ -694,7 +697,7 @@ def main():
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
-    output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.txt")
+    output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.json")
     if training_args.do_predict:
         logger.info("*** Predict ***")
 
@@ -729,10 +732,22 @@ def main():
 
     # For development - Easier to move the predictions file instead of the whole model
     if model_args.do_predict_based_on_predictions_file:
+        from strings_to_objects_parser import StringsToObjectsParser
+
+
         with open(output_prediction_file, "r") as f:
             predictions_dict = json.loads(f.read())
 
-        _to_qasrl_gs_arguments(predictions_dict['inputs'], predictions_dict['labels'], predictions_dict['predictions'])
+        strings_to_objects_parser = StringsToObjectsParser(
+            SEPARATOR_INPUT_QUESTION_PREDICATE,
+            SEPARATOR_OUTPUT_ANSWERS,
+            SEPARATOR_OUTPUT_QUESTIONS,
+            SEPARATOR_OUTPUT_QUESTION_ANSWER,
+            SEPARATOR_OUTPUT_PAIRS,
+            tokenizer.eos_token
+        )
+        labels_parsed, predictions_parsed = strings_to_objects_parser.to_qasrl_gs_arguments(predictions_dict['inputs'], predictions_dict['labels'], predictions_dict['predictions'])
+        evaluate(predictions_parsed, labels_parsed)
 
     if training_args.push_to_hub:
         kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "summarization"}

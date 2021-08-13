@@ -1,0 +1,3 @@
+[submodule "qasrl-gs"]
+	path = qasrl-gs
+	url = git@github.com:eranhirs/qasrl-gs.git

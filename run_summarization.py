@@ -436,33 +436,12 @@ def main():
 
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs
-    
-    def preprocess_function__prev_questions_answers(examples):
-        inputs = examples[text_column]
-        questions = [" ".join(x) for x in examples['question']]
-        targets = examples[summary_column]
-        # QA SRL can have multiple correct targets
-        new_targets = []
-        for question, target in zip(questions, targets):
-            new_target = " ; ".join(target) if isinstance(target, list) else target
-            new_target = f"{question} ~ {new_target}"
-            new_targets.append(new_target)
-        inputs = [prefix + inp for inp in inputs]
-        model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
 
-        # Setup the tokenizer for targets
-        with tokenizer.as_target_tokenizer():
-            labels = tokenizer(new_targets, max_length=max_target_length, padding=padding, truncation=True)
-
-        # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
-        # padding in the loss.
-        if padding == "max_length" and data_args.ignore_pad_token_for_loss:
-            labels["input_ids"] = [
-                [(l if l != tokenizer.pad_token_id else -100) for l in label] for label in labels["input_ids"]
-            ]
-
-        model_inputs["labels"] = labels["input_ids"]
-        return model_inputs    
+    SEPARATOR_INPUT_QUESTION_PREDICATE = tokenizer.additional_special_tokens[1]
+    SEPARATOR_OUTPUT_ANSWERS = tokenizer.additional_special_tokens[3]
+    SEPARATOR_OUTPUT_QUESTIONS = tokenizer.additional_special_tokens[4]  # If using only questions
+    SEPARATOR_OUTPUT_QUESTION_ANSWER = tokenizer.additional_special_tokens[5]
+    SEPARATOR_OUTPUT_PAIRS = tokenizer.additional_special_tokens[7]
 
     def preprocess_function__questions_answers(examples):
         inputs = examples[text_column]
@@ -475,27 +454,74 @@ def main():
         def _extract_inputs(x: pd.DataFrame) -> str:
             # all rows have the same index values because of the groupby
             any_row = x.iloc[0]
-#             return f"{any_row['input']}{tokenizer.additional_special_tokens[1]}{any_row['predicate']}"
-            return f"{any_row['input']}{tokenizer.eos_token}{any_row['predicate']}"
+            return f"{any_row['input']}{SEPARATOR_INPUT_QUESTION_PREDICATE}{any_row['predicate']}"
+#             return f"{any_row['input']}{tokenizer.eos_token}{any_row['predicate']}"
         
         def _extract_targets_all(x: pd.DataFrame) -> str:
+            """
+            Extracts ((question, answers), ...)
+            """
+            
             def _flatten_targets(targets: List[str]) -> str:
-                return f"{tokenizer.additional_special_tokens[0]}".join(targets)
+                return f"{SEPARATOR_OUTPUT_ANSWERS}".join(targets)
 
-            return f"{tokenizer.eos_token}".join([f"{q}{tokenizer.additional_special_tokens[2]}{_flatten_targets(t)}" for q, t in zip(x.question, x.target)])
+            return f"{SEPARATOR_OUTPUT_PAIRS}".join([f"{q}{tokenizer.additional_special_tokens[2]}{_flatten_targets(t)}" for q, t in zip(x.question, x.target)])
 
+        def _extract_targets_only_answers(x: pd.DataFrame) -> str:
+            """
+            Extracts (answer, answer, ...)
+            """
+            
+            def _flatten_targets(targets: List[str]) -> str:
+                return f"{SEPARATOR_OUTPUT_ANSWERS}".join(targets)
+         
+            
+            return f"{SEPARATOR_OUTPUT_ANSWERS}".join([f"{_flatten_targets(t)}" for q, t in zip(x.question, x.target)])
+
+        def _extract_targets_only_questions(x: pd.DataFrame) -> str:
+            """
+            Extracts (question, question, ...)
+            """        
+            
+            return f"{SEPARATOR_OUTPUT_QUESTIONS}".join([f"{q}" for q, t in zip(x.question, x.target)])
+
+        def _extract_targets_only_questions_first_word(x: pd.DataFrame) -> str:
+            """
+            Extracts (question, question, ...)
+            """        
+            
+            return f"{tokenizer.additional_special_tokens[0]}".join([f"{q.split(' ')[0]}" for q, t in zip(x.question, x.target)])
+
+        def _extract_targets_only_first_two_question_answers(x: pd.DataFrame) -> str:
+            """
+            Extracts (question, question, ...)
+            """        
+            
+            return f"{SEPARATOR_OUTPUT_PAIRS}".join([f"{q}{SEPARATOR_OUTPUT_QUESTION_ANSWER}{t[0]}" for q, t in list(zip(x.question, x.target))[:2]])
+
+        
         def _extract_targets_single(x: pd.DataFrame) -> str:
+            """
+            Extracts (quesiton, answers)
+            """
+
             def _flatten_targets(targets: List[str]) -> str:
                 return targets[0]
 
             x = x.iloc[0]
 
-#             return f"{tokenizer.eos_token}".join([f"{q}{tokenizer.additional_special_tokens[2]}{_flatten_targets(t)}" for q, t in zip([x.question], [x.target])])
-            return f"{tokenizer.eos_token}".join([f"{q}{tokenizer.eos_token}{_flatten_targets(t)}" for q, t in zip([x.question], [x.target])])      
+            return str([f"{q}{SEPARATOR_OUTPUT_QUESTION_ANSWER}{_flatten_targets(t)}" for q, t in zip([x.question], [x.target])])
 
         grouped_df = df.groupby(['input', 'predicate'])
         inputs = grouped_df.apply(_extract_inputs).tolist()
-        targets = grouped_df.apply(_extract_targets_single).tolist()
+        
+#         targets = grouped_df.apply(_extract_targets_single).tolist()
+#         targets = grouped_df.apply(_extract_targets_all).tolist()
+#         targets = grouped_df.apply(_extract_targets_only_answers).tolist()
+#         targets = grouped_df.apply(_extract_targets_only_questions).tolist()
+#         targets = grouped_df.apply(_extract_targets_only_questions_first_word).tolist()
+        targets = grouped_df.apply(_extract_targets_only_first_two_question_answers).tolist()        
+        
 
         inputs = [prefix + inp for inp in inputs]
         model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
@@ -515,8 +541,7 @@ def main():
         return model_inputs
 
     # preprocess_function = preprocess_function__answers
-    preprocess_function = preprocess_function__prev_questions_answers
-#     preprocess_function = preprocess_function__questions_answers
+    preprocess_function = preprocess_function__questions_answers
     
     if training_args.do_train:
         if "train" not in raw_datasets:
@@ -665,6 +690,7 @@ def main():
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
+    output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.txt")
     if training_args.do_predict:
         logger.info("*** Predict ***")
 
@@ -688,12 +714,12 @@ def main():
                 inputs = tokenizer.batch_decode(predict_dataset['input_ids'])
                 labels = tokenizer.batch_decode(predict_dataset['labels'])
                 predictions = tokenizer.batch_decode(
-                    predict_results.predictions, skip_special_tokens=True, clean_up_tokenization_spaces=True
+                    predict_results.predictions, skip_special_tokens=False, clean_up_tokenization_spaces=True
                 )
-                predictions = [f"Input: {input} ; label: {label} ; pred: {pred.strip()}" for input, label, pred in zip(inputs, labels, predictions)]
-                output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.txt")
+                predictions = [f"Input: {input} ; label: {label} ; pred: {pred.replace(tokenizer.pad_token, '').strip()}" for input, label, pred in zip(inputs, labels, predictions)]
                 with open(output_prediction_file, "w") as writer:
-                    writer.write("\n".join(predictions))
+                    writer.write("\n".join(predictions))        
+
 
     if training_args.push_to_hub:
         kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "summarization"}

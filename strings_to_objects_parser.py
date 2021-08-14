@@ -1,7 +1,9 @@
 import logging
 from typing import List, Tuple
 
-from qasrl_gs.scripts.common import Argument, Role, Question
+from spacy.matcher.phrasematcher import PhraseMatcher
+
+from qasrl_gs.scripts.common import Role, Question
 
 
 class StringsToObjectsParser:
@@ -53,15 +55,34 @@ class StringsToObjectsParser:
                 }
 
                 question = Question(text=question_str, **question_dict)
-                arguments = tuple([self._find_argument_answer_range(argument.replace(self.eos_token, "").strip(), input) for argument in arguments])
+                arguments = tuple([find_argument_answer_range(argument.replace(self.eos_token, "").strip(), input) for argument in arguments])
                 roles.append(Role(question, arguments))
             except:
                 skipped_pairs_strs.append(pair_str)
         logging.info(f"Skipped invalid QASRL format pairs ; len(skipped_pairs_strs) {len(skipped_pairs_strs)} ; example {skipped_pairs_strs[:5]}")
         return roles
 
-    def _find_argument_answer_range(self, argument: str, input: str) -> Tuple[int, int]:
-        start = input.index(argument)
-        end = start + len(argument)
-        return start, end
 
+SPACY_MODELS = {}
+
+
+def get_spacy(lang, **kwargs):
+    import spacy
+
+    if lang not in SPACY_MODELS:
+        SPACY_MODELS[lang] = spacy.load(lang, **kwargs)
+    return SPACY_MODELS[lang]
+
+
+def find_argument_answer_range(argument: str, input: str) -> Tuple[int, int]:
+    nlp = get_spacy('en_core_web_sm')
+    input_spacy = nlp(input)
+    argument_spacy = nlp(argument)
+    matcher = PhraseMatcher(nlp.vocab)
+    matcher.add("argument", [argument_spacy])
+    matches = matcher(input_spacy)
+
+    if not any(matches):
+        raise ValueError(f"No matches found ; argument {argument} ; input {input}")
+
+    return matches[0][1], matches[0][2]

@@ -263,6 +263,11 @@ def _setup_wandb(training_args: Seq2SeqTrainingArguments, wandb_run_name: str):
     use_wandb = "wandb" in training_args.report_to
     return wandb.init(name=wandb_run_name, project="qasrl", reinit=True, mode="online" if use_wandb else "disabled")
 
+def _clean_mem():
+    import torch
+    import gc
+    gc.collect()
+    torch.cuda.empty_cache()
 
 def _freeze_parameters(model):
     for param in model.encoder.parameters():
@@ -306,9 +311,10 @@ def main():
     # Log on each process the small summary:
     logger.warning(
         f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
-        + f"distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
+        + f" distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
     )
     logger.info(f"Training/evaluation parameters {training_args}")
+    logger.info(f"Model parameters {model_args}")    
 
     if data_args.source_prefix is None and model_args.model_name_or_path in [
         "t5-small",
@@ -651,6 +657,8 @@ def main():
         return preds, labels
 
     def compute_metrics(eval_preds):
+        logger.info("__Computing metrics__")
+        print("__Computing metrics__")
         preds, labels = eval_preds
         if isinstance(preds, tuple):
             preds = preds[0]
@@ -693,6 +701,7 @@ def main():
 
     # Training
     if training_args.do_train:
+        _clean_mem()
         checkpoint = None
         if training_args.resume_from_checkpoint is not None:
             checkpoint = training_args.resume_from_checkpoint
@@ -714,10 +723,13 @@ def main():
     # Evaluation
     results = {}
     if training_args.do_eval:
+        _clean_mem()
         logger.info("*** Evaluate ***")
 
         metrics = trainer.evaluate(
-            max_length=data_args.val_max_target_length, num_beams=data_args.num_beams, metric_key_prefix="eval"
+            max_length=data_args.val_max_target_length,
+            num_beams=data_args.num_beams,
+            metric_key_prefix="eval"
         )
         max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
         metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
@@ -727,6 +739,9 @@ def main():
 
     output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.json")
     if training_args.do_predict:
+        del train_dataset
+        del eval_dataset
+        _clean_mem()
         logger.info("*** Predict ***")
 
         predict_results = trainer.predict(
@@ -746,6 +761,8 @@ def main():
 
         if trainer.is_world_process_zero():
             if training_args.predict_with_generate:
+                logger.info("__Writing to file__")
+                print("_Writing to file_")                
                 inputs = tokenizer.batch_decode(predict_dataset['input_ids'])
                 labels = tokenizer.batch_decode(predict_dataset['labels'])
                 predictions = tokenizer.batch_decode(

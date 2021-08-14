@@ -84,6 +84,9 @@ class ModelArguments:
     do_predict_based_on_predictions_file: bool = field(
         default=False
     )
+    wandb_run_name: str = field(
+        default=None
+    )
     config_name: Optional[str] = field(
         default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
     )
@@ -252,9 +255,10 @@ summarization_name_mapping = {
     "qa_srl": ("sentence", "answers"),
 }
 
-def _setup_wandb(training_args: Seq2SeqTrainingArguments):
+
+def _setup_wandb(training_args: Seq2SeqTrainingArguments, wandb_run_name: str):
     use_wandb = "wandb" in training_args.report_to
-    return wandb.init(project="qasrl", reinit=True, mode="online" if use_wandb else "disabled")
+    return wandb.init(name=wandb_run_name, project="qasrl", reinit=True, mode="online" if use_wandb else "disabled")
 
 
 def main():
@@ -283,7 +287,7 @@ def main():
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
     
-    run = _setup_wandb(training_args)
+    run = _setup_wandb(training_args, model_args.wandb_run_name)
 
     # Log on each process the small summary:
     logger.warning(
@@ -779,7 +783,7 @@ def main():
         
     run.finish()
 
-    return results
+    return results, run
 
 
 def _mp_fn(index):

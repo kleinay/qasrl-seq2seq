@@ -81,6 +81,9 @@ class ModelArguments:
     debug_mode: bool = field(
         default=False
     )
+    freeze_parameters: bool = field(
+        default=False
+    )
     do_predict_based_on_predictions_file: bool = field(
         default=False
     )
@@ -261,6 +264,17 @@ def _setup_wandb(training_args: Seq2SeqTrainingArguments, wandb_run_name: str):
     return wandb.init(name=wandb_run_name, project="qasrl", reinit=True, mode="online" if use_wandb else "disabled")
 
 
+def _freeze_parameters(model):
+    for param in model.encoder.parameters():
+        param.requires_grad = False
+
+    for param in model.decoder.parameters():
+        param.requires_grad = False
+
+    for param in model.lm_head.parameters():
+        param.requires_grad = True
+
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -383,6 +397,9 @@ def main():
     )
 
     model.resize_token_embeddings(len(tokenizer))
+
+    if model_args.freeze_parameters:
+        _freeze_parameters(model)
 
     if model.config.decoder_start_token_id is None:
         raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")

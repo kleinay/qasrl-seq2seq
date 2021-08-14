@@ -50,6 +50,7 @@ from transformers.utils.versions import require_version
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
+from preprocessing import Preprocessor
 from qasrl_gs.scripts.evaluate import evaluate
 
 check_min_version("4.10.0.dev0")
@@ -89,6 +90,12 @@ class ModelArguments:
     )
     wandb_run_name: str = field(
         default=None
+    )
+    preprocess_input_func: str = field(
+        default='input'
+    )
+    preprocess_output_func: str = field(
+        default='all'
     )
     config_name: Optional[str] = field(
         default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
@@ -483,8 +490,14 @@ def main():
     SEPARATOR_OUTPUT_QUESTIONS = tokenizer.additional_special_tokens[4]  # If using only questions
     SEPARATOR_OUTPUT_QUESTION_ANSWER = tokenizer.additional_special_tokens[5]
     SEPARATOR_OUTPUT_PAIRS = tokenizer.additional_special_tokens[7]
+    preprocessor = Preprocessor(SEPARATOR_INPUT_QUESTION_PREDICATE,
+                 SEPARATOR_OUTPUT_ANSWERS,
+                 SEPARATOR_OUTPUT_QUESTIONS,
+                 SEPARATOR_OUTPUT_QUESTION_ANSWER,
+                 SEPARATOR_OUTPUT_PAIRS,
+                 tokenizer.eos_token)
 
-    def preprocess_function__questions_answers(examples):
+    def preprocess_function__questions_answers(examples, extract_inputs_func, extract_outputs_func):
         inputs = examples[text_column]
         predicates = examples['predicate']
         questions = [" ".join(x) for x in examples['question']]
@@ -492,77 +505,9 @@ def main():
 
         df = pd.DataFrame([{"input": input, "predicate": predicate, "question": question, "target": target} for input, predicate, question, target in zip(inputs, predicates, questions, targets)])
 
-        def _extract_inputs(x: pd.DataFrame) -> str:
-            # all rows have the same index values because of the groupby
-            any_row = x.iloc[0]
-            return f"{any_row['input']}{SEPARATOR_INPUT_QUESTION_PREDICATE}{any_row['predicate']}"
-#             return f"{any_row['input']}{tokenizer.eos_token}{any_row['predicate']}"
-        
-        def _extract_targets_all(x: pd.DataFrame) -> str:
-            """
-            Extracts ((question, answers), ...)
-            """
-            
-            def _flatten_targets(targets: List[str]) -> str:
-                return f"{SEPARATOR_OUTPUT_ANSWERS}".join(targets)
-
-            return f"{SEPARATOR_OUTPUT_PAIRS}".join([f"{q}{tokenizer.additional_special_tokens[2]}{_flatten_targets(t)}" for q, t in zip(x.question, x.target)])
-
-        def _extract_targets_only_answers(x: pd.DataFrame) -> str:
-            """
-            Extracts (answer, answer, ...)
-            """
-            
-            def _flatten_targets(targets: List[str]) -> str:
-                return f"{SEPARATOR_OUTPUT_ANSWERS}".join(targets)
-         
-            
-            return f"{SEPARATOR_OUTPUT_ANSWERS}".join([f"{_flatten_targets(t)}" for q, t in zip(x.question, x.target)])
-
-        def _extract_targets_only_questions(x: pd.DataFrame) -> str:
-            """
-            Extracts (question, question, ...)
-            """        
-            
-            return f"{SEPARATOR_OUTPUT_QUESTIONS}".join([f"{q}" for q, t in zip(x.question, x.target)])
-
-        def _extract_targets_only_questions_first_word(x: pd.DataFrame) -> str:
-            """
-            Extracts (question, question, ...)
-            """        
-            
-            return f"{tokenizer.additional_special_tokens[0]}".join([f"{q.split(' ')[0]}" for q, t in zip(x.question, x.target)])
-
-        def _extract_targets_only_first_two_question_answers(x: pd.DataFrame) -> str:
-            """
-            Extracts (question, question, ...)
-            """        
-            
-            return f"{SEPARATOR_OUTPUT_PAIRS}".join([f"{q}{SEPARATOR_OUTPUT_QUESTION_ANSWER}{t[0]}" for q, t in list(zip(x.question, x.target))[:2]])
-
-        
-        def _extract_targets_single(x: pd.DataFrame) -> str:
-            """
-            Extracts (quesiton, answers)
-            """
-
-            def _flatten_targets(targets: List[str]) -> str:
-                return targets[0]
-
-            x = x.iloc[0]
-
-            return str([f"{q}{SEPARATOR_OUTPUT_QUESTION_ANSWER}{_flatten_targets(t)}" for q, t in zip([x.question], [x.target])])
-
         grouped_df = df.groupby(['input', 'predicate'])
-        inputs = grouped_df.apply(_extract_inputs).tolist()
-        
-#         targets = grouped_df.apply(_extract_targets_single).tolist()
-#         targets = grouped_df.apply(_extract_targets_all).tolist()
-#         targets = grouped_df.apply(_extract_targets_only_answers).tolist()
-#         targets = grouped_df.apply(_extract_targets_only_questions).tolist()
-#         targets = grouped_df.apply(_extract_targets_only_questions_first_word).tolist()
-        targets = grouped_df.apply(_extract_targets_only_first_two_question_answers).tolist()        
-        
+        inputs = grouped_df.apply(extract_inputs_func).tolist()
+        targets = grouped_df.apply(extract_outputs_func).tolist()
 
         inputs = [prefix + inp for inp in inputs]
         model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
@@ -581,9 +526,15 @@ def main():
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs
 
-    # preprocess_function = preprocess_function__answers
-    preprocess_function = preprocess_function__questions_answers
-    
+    preprocess_function_map = {
+        "input": preprocessor.extract_inputs,
+        "first_two_question_answer": preprocessor.extract_targets_only_first_two_question_answers,
+        "all": preprocessor.extract_targets_all
+    }
+
+    preprocess_function = lambda x: preprocess_function__questions_answers(x, preprocess_function_map[model_args.preprocess_input_func], preprocess_function_map[model_args.preprocess_output_func])
+
+    _clean_mem()
     if training_args.do_train:
         if "train" not in raw_datasets:
             raise ValueError("--do_train requires a train dataset")

@@ -24,6 +24,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional, List
 
+import wandb
 import datasets
 import nltk  # Here to have a nice missing dependency error message early on
 import numpy as np
@@ -251,6 +252,10 @@ summarization_name_mapping = {
     "qa_srl": ("sentence", "answers"),
 }
 
+def _setup_wandb(training_args: Seq2SeqTrainingArguments):
+    use_wandb = "wandb" in training_args.report_to
+    return wandb.init(project="qasrl", reinit=True, mode="online" if use_wandb else "disabled")
+
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -277,6 +282,8 @@ def main():
     transformers.utils.logging.set_verbosity(log_level)
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
+    
+    run = _setup_wandb(training_args)
 
     # Log on each process the small summary:
     logger.warning(
@@ -747,8 +754,17 @@ def main():
             tokenizer.eos_token
         )
         labels_parsed, predictions_parsed = strings_to_objects_parser.to_qasrl_gs_arguments(predictions_dict['inputs'], predictions_dict['labels'], predictions_dict['predictions'])
-        evaluate(predictions_parsed, labels_parsed)
-
+        unlabelled_arg_metrics, _, _ = evaluate(predictions_parsed, labels_parsed)
+        print(f"Result: {unlabelled_arg_metrics}")
+        unlabelled_arg_metrics_dict = {
+            "prec": unlabelled_arg_metrics.prec(),
+            "recall": unlabelled_arg_metrics.recall(),
+            "f1": unlabelled_arg_metrics.f1()
+        }
+        trainer.log_metrics("predict_mine", unlabelled_arg_metrics_dict)
+        trainer.save_metrics("predict_mine", unlabelled_arg_metrics_dict)
+        wandb.log(unlabelled_arg_metrics_dict)
+        
     if training_args.push_to_hub:
         kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "summarization"}
         if data_args.dataset_name is not None:
@@ -760,6 +776,8 @@ def main():
                 kwargs["dataset"] = data_args.dataset_name
 
         trainer.push_to_hub(**kwargs)
+        
+    run.finish()
 
     return results
 

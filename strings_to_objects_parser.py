@@ -32,6 +32,7 @@ class StringsToObjectsParser:
 
     def _str_to_qasrl_gs_arguments(self, role_str: str, input: str) -> List[Role]:
         roles = []
+        skipped_pairs_strs = []
         pairs_strs = role_str.split(self.separator_output_pairs)
         for pair_str in pairs_strs:
             try:
@@ -55,7 +56,8 @@ class StringsToObjectsParser:
                 arguments = tuple([self._find_argument_answer_range(argument.replace(self.eos_token, "").strip(), input) for argument in arguments])
                 roles.append(Role(question, arguments))
             except:
-                logging.exception(f"Skipped invalid qasrl pair ; {pair_str}")
+                skipped_pairs_strs.append(pair_str)
+        logging.info(f"Skipped invalid QASRL format pairs ; len(skipped_pairs_strs) {len(skipped_pairs_strs)} ; example {skipped_pairs_strs[:5]}")
         return roles
 
     def _find_argument_answer_range(self, argument: str, input: str) -> Tuple[int, int]:

@@ -10,5 +10,5 @@ class InputExample:
     sentence: str
     predicate: str
     predicate_idx: int
-    gold: Optional[str] = None
+    gold_question: Optional[str] = None
     predicted_question: Optional[str] = None

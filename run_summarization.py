@@ -262,7 +262,7 @@ summarization_name_mapping = {
     "xglue": ("news_body", "news_title"),
     "xsum": ("document", "summary"),
     "wiki_summary": ("article", "highlights"),
-    "qa_srl": ("sentence", "answers"),
+    "qa_srl": ("sentence", "answers")
 }
 
 
@@ -461,29 +461,6 @@ def main():
             "label_smoothing is enabled but the `prepare_decoder_input_ids_from_labels` method is not defined for"
             f"`{model.__class__.__name__}`. This will lead to loss being calculated twice and will take up more memory"
         )
-
-    def preprocess_function__answers(examples):
-        inputs = examples[text_column]
-        questions = [" ".join(x) for x in examples['question']]
-        targets = examples[summary_column]
-        # QA SRL can have multiple correct targets
-        targets = [" ; ".join(target) if isinstance(target, list) else target for target in targets]
-        inputs = [prefix + inp for inp in inputs]
-        model_inputs = tokenizer(inputs, questions, max_length=data_args.max_source_length, padding=padding, truncation=True)
-
-        # Setup the tokenizer for targets
-        with tokenizer.as_target_tokenizer():
-            labels = tokenizer(targets, max_length=max_target_length, padding=padding, truncation=True)
-
-        # If we are padding here, replace all tokenizer.pad_token_id in the labels by -100 when we want to ignore
-        # padding in the loss.
-        if padding == "max_length" and data_args.ignore_pad_token_for_loss:
-            labels["input_ids"] = [
-                [(l if l != tokenizer.pad_token_id else -100) for l in label] for label in labels["input_ids"]
-            ]
-
-        model_inputs["labels"] = labels["input_ids"]
-        return model_inputs
 
     SEPARATOR_INPUT_QUESTION_PREDICATE = tokenizer.additional_special_tokens[1]
     SEPARATOR_OUTPUT_ANSWERS = tokenizer.additional_special_tokens[3]

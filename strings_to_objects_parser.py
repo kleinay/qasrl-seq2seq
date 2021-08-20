@@ -85,4 +85,5 @@ def find_argument_answer_range(argument: str, input: str) -> Tuple[int, int]:
     if not any(matches):
         raise ValueError(f"No matches found ; argument {argument} ; input {input}")
 
-    return matches[0][1], matches[0][2]
+    first_match = matches[0]
+    return first_match[1], first_match[2]

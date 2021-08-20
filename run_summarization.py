@@ -50,6 +50,7 @@ from transformers.utils.versions import require_version
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
+from models import InputExample
 from preprocessing import Preprocessor
 from qasrl_gs.scripts.evaluate import evaluate
 
@@ -476,11 +477,19 @@ def main():
 
     def preprocess_function__questions_answers(examples, extract_inputs_func, extract_outputs_func):
         inputs = examples[text_column]
-        predicates = examples['predicate']
-        questions = [" ".join(x) for x in examples['question']]
-        targets = examples[summary_column]
+        # in 2015 dataset the column is predicate, and in 2020 it is verb
+        predicate_key = 'predicate' if 'predicate' in examples else 'verb'
+        # in 2015 dataset it is predicate_idx, and in 2020 it is verb_idx
+        predicate_index_key = 'predicate_idx' if 'predicate_idx' in examples else 'verb_idx'
+        # in 2015 dataset the question is an array, and in 2020 it is a string
+        questions = [" ".join(x) if isinstance(x, list) else x for x in examples['question']]
+        # in 2015 dataset the answers is an array, and in 2020 it is a string separated by ~!~
+        targets = [x.split("~!~") if isinstance(x, str) else x for x in examples[summary_column]]
 
-        df = pd.DataFrame([{"input": input, "predicate": predicate, "question": question, "target": target} for input, predicate, question, target in zip(inputs, predicates, questions, targets)])
+        predicates = examples[predicate_key]
+        predicate_indices = examples[predicate_index_key]
+
+        df = pd.DataFrame([{"input": input, "predicate": predicate, "question": question, "target": target, "predicate_idx": predicate_idx} for input, predicate, question, target, predicate_idx in zip(inputs, predicates, questions, targets, predicate_indices)])
 
         grouped_df = df.groupby(['input', 'predicate'])
         inputs = grouped_df.apply(extract_inputs_func).tolist()
@@ -501,6 +510,10 @@ def main():
             ]
 
         model_inputs["labels"] = labels["input_ids"]
+        # We can take index 0 because of the group by all values have the same predicate
+        model_inputs["predicates"] = grouped_df.apply(lambda x: x.iloc[0])['predicate'].tolist()
+        model_inputs["predicates_indices"] = grouped_df.apply(lambda x: x.iloc[0])['predicate_idx'].tolist()
+        model_inputs["sentence"] = grouped_df.apply(lambda x: x.iloc[0])['input'].tolist()
         return model_inputs
 
     preprocess_function_map = {
@@ -665,10 +678,8 @@ def main():
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
-    output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.json")
+    output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.csv")
     if training_args.do_predict:
-        del train_dataset
-        del eval_dataset
         _clean_mem()
         logger.info("*** Predict ***")
 
@@ -690,23 +701,17 @@ def main():
         if trainer.is_world_process_zero():
             if training_args.predict_with_generate:
                 logger.info("__Writing to file__")
-                print("_Writing to file_")                
-                inputs = tokenizer.batch_decode(predict_dataset['input_ids'])
                 labels = tokenizer.batch_decode(predict_dataset['labels'])
                 predictions = tokenizer.batch_decode(
                     predict_results.predictions, skip_special_tokens=False, clean_up_tokenization_spaces=True
                 )
-
-                with open(output_prediction_file, "w") as f:
-                    f.write(json.dumps({"inputs": inputs, "labels": labels, "predictions": [x.replace(tokenizer.pad_token, "").strip() for x in predictions]}))
-                # predictions = [f"Input: {input} ; label: {label} ; pred: {pred.replace(tokenizer.pad_token, '').strip()}" for input, label, pred in zip(inputs, labels, predictions)]
-                # with open(output_prediction_file, "w") as writer:
-                #     writer.write("\n".join(predictions))
+                predictions = [x.replace(tokenizer.pad_token, "").strip() for x in predictions]
+                examples = [InputExample(input, predicate, predicate_idx, label, prediction) for input, label, prediction, predicate, predicate_idx in zip(predict_dataset['sentence'], labels, predictions, predict_dataset['predicates'], predict_dataset['predicates_indices'])]
+                pd.DataFrame([x.to_dict() for x in examples]).to_csv(output_prediction_file, index=False)
 
     # For development - Easier to move the predictions file instead of the whole model
     if model_args.do_predict_based_on_predictions_file:
         from strings_to_objects_parser import StringsToObjectsParser
-
 
         with open(output_prediction_file, "r") as f:
             predictions_dict = json.loads(f.read())

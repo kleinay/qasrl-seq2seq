@@ -57,7 +57,7 @@ class StringsToObjectsParser:
         for pair_str in pairs_strs:
             try:
                 question_str, arguments_strs = pair_str.split(self.separator_output_question_answer)
-                clean_question_str = question_str.replace(f"{QASRL_UNUSED_SLOT} ","")
+                clean_question_str = question_str.replace(f"{QASRL_UNUSED_SLOT} ","").replace(f"{QASRL_UNUSED_SLOT}?", "?").replace(f" ?", "?")
                 arguments = arguments_strs.split(self.separator_output_answers)
                 clean_arguments_objs = [argument.replace(self.eos_token, "").strip() for argument in arguments]
                 arguments_ranges_objs = [find_argument_answer_range(argument, sentence) for argument in clean_arguments_objs]
@@ -99,4 +99,4 @@ def find_argument_answer_range(argument: str, input: str) -> Tuple[int, int]:
         raise ValueError(f"No matches found ; argument {argument} ; input {input}")
 
     first_match = matches[0]
-    return first_match[1], first_match[2] - 1
+    return first_match[1], first_match[2]

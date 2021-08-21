@@ -11,7 +11,7 @@ def combine_files_tag_with_sentences(tags_file: str, sentences_file: str, combin
     tags_df = pd.read_csv(tags_file)
     sentences_df = pd.read_csv(sentences_file)
     combined_df = pd.merge(tags_df, sentences_df, on="qasrl_id")
-    combined_df.to_csv(combined_output_file)
+    combined_df.to_csv(combined_output_file, index=False)
 
 
 if __name__ == "__main__":

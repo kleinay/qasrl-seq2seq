@@ -1,0 +1,8 @@
+torch
+git+https://github.com/huggingface/transformers
+datasets
+rouge_score
+networkx
+wandb
+dataclasses_json
+spacy

@@ -53,6 +53,7 @@ from transformers.utils.versions import require_version
 from preprocessing import Preprocessor
 from qasrl_gs.scripts.common import QuestionAnswer
 from qasrl_gs.scripts.evaluate import evaluate
+from utils import setup_wandb
 
 check_min_version("4.10.0.dev0")
 
@@ -84,9 +85,6 @@ class ModelArguments:
         default=False
     )
     freeze_parameters: bool = field(
-        default=False
-    )
-    do_predict_based_on_predictions_file: bool = field(
         default=False
     )
     wandb_run_name: str = field(
@@ -266,11 +264,6 @@ summarization_name_mapping = {
     "qa_srl": ("sentence", "answers")
 }
 
-
-def _setup_wandb(training_args: Seq2SeqTrainingArguments, wandb_run_name: str):
-    use_wandb = "wandb" in training_args.report_to
-    return wandb.init(name=wandb_run_name, project="qasrl", reinit=True, mode="online" if use_wandb else "disabled")
-
 def _clean_mem():
     import torch
     import gc
@@ -314,7 +307,7 @@ def main():
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
     
-    run = _setup_wandb(training_args, model_args.wandb_run_name)
+    run = setup_wandb("wandb" in training_args.report_to, model_args.wandb_run_name)
 
     # Log on each process the small summary:
     logger.warning(
@@ -427,8 +420,6 @@ def main():
     elif training_args.do_eval:
         column_names = raw_datasets["validation"].column_names
     elif training_args.do_predict:
-        column_names = raw_datasets["test"].column_names
-    elif model_args.do_predict_based_on_predictions_file:
         column_names = raw_datasets["test"].column_names
     else:
         logger.info("There is nothing to do. Please pass `do_train`, `do_eval` and/or `do_predict`.")
@@ -721,23 +712,6 @@ def main():
 
                 examples: List[QuestionAnswer] = strings_to_objects_parser.to_qasrl_gs_csv_format(predict_dataset, predictions)
                 pd.DataFrame([x.to_dict() for x in examples]).to_csv(output_prediction_file, index=False)
-
-    # For development - Easier to move the predictions file instead of the whole model
-    if model_args.do_predict_based_on_predictions_file:
-        with open(output_prediction_file, "r") as f:
-            predictions_dict = json.loads(f.read())
-
-        labels_parsed, predictions_parsed = strings_to_objects_parser.to_qasrl_gs_arguments(predictions_dict['inputs'], predictions_dict['labels'], predictions_dict['predictions'])
-        unlabelled_arg_metrics, _, _ = evaluate(predictions_parsed, labels_parsed)
-        print(f"Result: {unlabelled_arg_metrics}")
-        unlabelled_arg_metrics_dict = {
-            "prec": unlabelled_arg_metrics.prec(),
-            "recall": unlabelled_arg_metrics.recall(),
-            "f1": unlabelled_arg_metrics.f1()
-        }
-        trainer.log_metrics("predict_mine", unlabelled_arg_metrics_dict)
-        trainer.save_metrics("predict_mine", unlabelled_arg_metrics_dict)
-        wandb.log(unlabelled_arg_metrics_dict)
         
     if training_args.push_to_hub:
         kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "summarization"}

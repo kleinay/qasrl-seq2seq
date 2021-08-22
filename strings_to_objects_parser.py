@@ -40,16 +40,6 @@ class StringsToObjectsParser:
 
         return qasrl_predictions
 
-    def to_qasrl_gs_arguments(self, inputs: List[str], labels: List[str], predictions: List[str]) -> Tuple[
-        List[Role], List[Role]]:
-        labels_parsed = []
-        predictions_parsed = []
-        for input, label, prediction in zip(inputs, labels, predictions):
-            labels_parsed.extend(self._str_to_qasrl_gs_arguments(label, input))
-            predictions_parsed.extend(self._str_to_qasrl_gs_arguments(prediction, input))
-
-        return labels_parsed, predictions_parsed
-
     def _str_to_qasrl_gs_arguments(self, question_str: str, sentence: str, qasrl_idx: str, verb_idx: int, verb:str) -> List[QuestionAnswer]:
         questions_answers = []
         skipped_pairs_strs = []

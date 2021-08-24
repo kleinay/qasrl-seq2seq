@@ -264,13 +264,17 @@ summarization_name_mapping = {
     "qa_srl": ("sentence", "answers")
 }
 
+
 def _clean_mem():
     import torch
     import gc
     gc.collect()
     torch.cuda.empty_cache()
 
+
 def _freeze_parameters(model):
+    # TODO: Do not freeze special tokens
+
     for param in model.encoder.parameters():
         param.requires_grad = False
 
@@ -376,6 +380,21 @@ def main():
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
+    # Special tokens used in modelling the sequences
+    SEPARATOR_INPUT_QUESTION_PREDICATE = "<QUESTION_PREDICATE_SEP>"
+    SEPARATOR_OUTPUT_ANSWERS = "<ANSWERS_SEP>"
+    SEPARATOR_OUTPUT_QUESTIONS = "<QUESTION_SEP>"  # If using only questions
+    SEPARATOR_OUTPUT_QUESTION_ANSWER = "<QUESTION_ANSWER_SEP>"
+    SEPARATOR_OUTPUT_PAIRS = "<QA_PAIRS_SEP>"
+    all_special_tokens = [
+        SEPARATOR_INPUT_QUESTION_PREDICATE,
+        SEPARATOR_OUTPUT_ANSWERS,
+        SEPARATOR_OUTPUT_QUESTIONS,
+        SEPARATOR_OUTPUT_QUESTION_ANSWER,
+        SEPARATOR_OUTPUT_PAIRS
+
+    ]
+
     # Load pretrained model and tokenizer
     #
     # Distributed training:
@@ -393,6 +412,7 @@ def main():
         use_fast=model_args.use_fast_tokenizer,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
+        additional_special_tokens=all_special_tokens
     )
     model = AutoModelForSeq2SeqLM.from_pretrained(
         model_args.model_name_or_path,
@@ -400,7 +420,7 @@ def main():
         config=config,
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
-        use_auth_token=True if model_args.use_auth_token else None,
+        use_auth_token=True if model_args.use_auth_token else None
     )
 
     model.resize_token_embeddings(len(tokenizer))
@@ -454,11 +474,6 @@ def main():
             f"`{model.__class__.__name__}`. This will lead to loss being calculated twice and will take up more memory"
         )
 
-    SEPARATOR_INPUT_QUESTION_PREDICATE = tokenizer.additional_special_tokens[1]
-    SEPARATOR_OUTPUT_ANSWERS = tokenizer.additional_special_tokens[3]
-    SEPARATOR_OUTPUT_QUESTIONS = tokenizer.additional_special_tokens[4]  # If using only questions
-    SEPARATOR_OUTPUT_QUESTION_ANSWER = tokenizer.additional_special_tokens[5]
-    SEPARATOR_OUTPUT_PAIRS = tokenizer.additional_special_tokens[7]
     preprocessor = Preprocessor(SEPARATOR_INPUT_QUESTION_PREDICATE,
                  SEPARATOR_OUTPUT_ANSWERS,
                  SEPARATOR_OUTPUT_QUESTIONS,
@@ -476,8 +491,8 @@ def main():
         questions = [" ".join(x) if isinstance(x, list) else x for x in examples['question']]
         # in 2015 dataset the answers is an array, and in 2020 it is a string separated by ~!~
         targets = [x.split("~!~") if isinstance(x, str) else x for x in examples[summary_column]]
-        # in 2015 dataset there is no ids, and in 2020 it is qasrl_id
-        qasrl_indices = examples['qasrl_id']
+        # in 2015 dataset there is no ids so just initialize empty, and in 2020 it is qasrl_id
+        qasrl_indices = examples['qasrl_id'] if 'qasrl_id' in examples else ["" for x in examples[predicate_index_key]]
 
         predicates = examples[predicate_key]
         predicate_indices = examples[predicate_index_key]

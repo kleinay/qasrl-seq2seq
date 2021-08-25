@@ -10,16 +10,7 @@ from utils import setup_wandb
 def evaluate(input_gold_file, input_prediction_file, input_sentences_path: Optional[str], wandb_run_name: Optional[str]):
     setup_wandb(wandb_run_name is not None, wandb_run_name)
 
-    unlabelled_arg_metrics = main(proposed_path=input_prediction_file, reference_path=input_gold_file, sents_path=input_sentences_path)
-
-    print(f"Result: {unlabelled_arg_metrics}")
-    unlabelled_arg_metrics_dict = {
-        "prec": unlabelled_arg_metrics.prec(),
-        "recall": unlabelled_arg_metrics.recall(),
-        "f1": unlabelled_arg_metrics.f1()
-    }
-    wandb.log(unlabelled_arg_metrics_dict)
-
+    main(proposed_path=input_prediction_file, reference_path=input_gold_file, sents_path=input_sentences_path)
 
 if __name__ == "__main__":
     ap = ArgumentParser()

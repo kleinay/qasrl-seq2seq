@@ -1,5 +1,5 @@
 import logging
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 
 from datasets import Dataset
 from spacy.matcher.phrasematcher import PhraseMatcher
@@ -20,6 +20,7 @@ class StringsToObjectsParser:
                  separator_output_questions: str,
                  separator_output_question_answer: str,
                  separator_output_pairs: str,
+                 bos_token: Optional[str],
                  eos_token: str,
                  pad_token: str
                  ):
@@ -28,6 +29,7 @@ class StringsToObjectsParser:
         self.separator_output_questions = separator_output_questions
         self.separator_output_question_answer = separator_output_question_answer
         self.separator_output_pairs = separator_output_pairs
+        self.bos_token = bos_token
         self.eos_token = eos_token
         self.pad_token = pad_token
 
@@ -47,9 +49,9 @@ class StringsToObjectsParser:
         for pair_str in pairs_strs:
             try:
                 question_str, arguments_strs = pair_str.split(self.separator_output_question_answer)
-                clean_question_str = question_str.replace(f"{QASRL_UNUSED_SLOT} ","").replace(f"{QASRL_UNUSED_SLOT}?", "?").replace(f" ?", "?")
+                clean_question_str = self._clean_question(question_str)
                 arguments = arguments_strs.split(self.separator_output_answers)
-                clean_arguments_objs = [argument.replace(self.eos_token, "").strip() for argument in arguments]
+                clean_arguments_objs = [self._clean_generated_string(argument) for argument in arguments]
                 arguments_ranges_objs = [find_argument_answer_range(argument, sentence) for argument in clean_arguments_objs]
                 arguments_str = QuestionAnswer.answer_obj_to_str(clean_arguments_objs)
                 arguments_ranges_str = QuestionAnswer.answer_range_obj_to_str(arguments_ranges_objs)
@@ -60,6 +62,14 @@ class StringsToObjectsParser:
 
         logging.info(f"Skipped invalid QASRL format pairs ; len(skipped_pairs_strs) {len(skipped_pairs_strs)} ; example {skipped_pairs_strs[:5]}")
         return questions_answers
+
+    def _clean_question(self, question_str: str) -> str:
+        return self._clean_generated_string(question_str.replace(f"{QASRL_UNUSED_SLOT} ","").replace(f"{QASRL_UNUSED_SLOT}?", "?").replace(f" ?", "?"))
+
+    def _clean_generated_string(self, generated_string: str) -> str:
+        if self.bos_token is not None:
+            generated_string = generated_string.replace(self.bos_token, "")
+        return generated_string.replace(self.eos_token, "").strip()
 
 
 SPACY_MODELS = {}

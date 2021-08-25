@@ -12,7 +12,7 @@ def test_find_argument_answer_range():
 
 class TestStringsToObjectsParser:
     def test_to_qasrl_gs_csv_format(self):
-        predictions = ["who did someone lodge _ with _?<extra_id_5>other medical students <extra_id_3> Henry Stephens<extra_id_7>where did someone lodge _ _ _ ?<extra_id_5>in Southwark</s><pad><pad><pad><pad>"]
+        predictions = ["</s><s>who did someone lodge _ with _?<extra_id_5>other medical students <extra_id_3> Henry Stephens<extra_id_7>where did someone lodge _ _ _ ?<extra_id_5>in Southwark</s><pad><pad><pad><pad>"]
 
         dataset = {
             "sentence": ["He lodged near the hospital at 28 St Thomas \'s Street in Southwark , with other medical students , including Henry Stephens who became a famous inventor and ink magnate ."],
@@ -24,9 +24,10 @@ class TestStringsToObjectsParser:
         separator_output_answers = "<extra_id_3>"
         separator_output_question_answer = "<extra_id_5>"
         separator_output_pairs = "<extra_id_7>"
+        bos_token = "<s>"  # Only relevant for BART
         eos_token = "</s>"
         pad_token = "<pad>"
-        strings_to_objects_parser = StringsToObjectsParser(MagicMock(), separator_output_answers, MagicMock(), separator_output_question_answer, separator_output_pairs, eos_token, pad_token)
+        strings_to_objects_parser = StringsToObjectsParser(MagicMock(), separator_output_answers, MagicMock(), separator_output_question_answer, separator_output_pairs, bos_token, eos_token, pad_token)
 
         result = strings_to_objects_parser.to_qasrl_gs_csv_format(dataset, predictions)
 
@@ -37,7 +38,7 @@ class TestStringsToObjectsParser:
                 verb="lodged",
                 question="who did someone lodge with?",
                 answer="other medical students~!~Henry Stephens",
-                answer_range="15:17~!~20:21"
+                answer_range="15:18~!~20:22"
             ),
             QuestionAnswer(
                 qasrl_id="some_id",
@@ -45,6 +46,6 @@ class TestStringsToObjectsParser:
                 verb="lodged",
                 question="where did someone lodge?",
                 answer="in Southwark",
-                answer_range="11:12"
+                answer_range="11:13"
             )
         ]

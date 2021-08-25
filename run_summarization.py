@@ -710,6 +710,7 @@ def main():
         SEPARATOR_OUTPUT_QUESTIONS,
         SEPARATOR_OUTPUT_QUESTION_ANSWER,
         SEPARATOR_OUTPUT_PAIRS,
+        tokenizer.bos_token,
         tokenizer.eos_token,
         tokenizer.pad_token
     )

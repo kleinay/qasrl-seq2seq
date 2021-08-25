@@ -78,6 +78,9 @@ class ModelArguments:
     Arguments pertaining to which model/config/tokenizer we are going to fine-tune from.
     """
 
+    model_type: str = field(
+        metadata={"help": "Type of the model (t5 or bart)"}
+    )
     model_name_or_path: str = field(
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
@@ -319,9 +322,12 @@ def main():
         + f" distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
     )
     logger.info(f"Training/evaluation parameters {training_args}")
-    logger.info(f"Model parameters {model_args}")    
+    logger.info(f"Model parameters {model_args}")
 
-    is_t5_model = model_args.model_name_or_path in [
+    if model_args.model_type not in ["t5", "bart"]:
+        raise ValueError(f"Invalid model_type received ; model_type {model_args.model_type}")
+
+    is_t5_model = model_args.model_type == "t5" or model_args.model_type in [
         "t5-small",
         "t5-base",
         "t5-large",

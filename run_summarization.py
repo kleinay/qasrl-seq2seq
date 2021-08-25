@@ -321,13 +321,14 @@ def main():
     logger.info(f"Training/evaluation parameters {training_args}")
     logger.info(f"Model parameters {model_args}")    
 
-    if data_args.source_prefix is None and model_args.model_name_or_path in [
+    is_t5_model = model_args.model_name_or_path in [
         "t5-small",
         "t5-base",
         "t5-large",
         "t5-3b",
         "t5-11b",
-    ]:
+    ]
+    if data_args.source_prefix is None and is_t5_model:
         logger.warning(
             "You're running a t5 model but didn't provide a source prefix, which is the expected, e.g. with "
             "`--source_prefix 'summarize: ' `"
@@ -381,19 +382,28 @@ def main():
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
     # Special tokens used in modelling the sequences
-    SEPARATOR_INPUT_QUESTION_PREDICATE = "<QUESTION_PREDICATE_SEP>"
-    SEPARATOR_OUTPUT_ANSWERS = "<ANSWERS_SEP>"
-    SEPARATOR_OUTPUT_QUESTIONS = "<QUESTION_SEP>"  # If using only questions
-    SEPARATOR_OUTPUT_QUESTION_ANSWER = "<QUESTION_ANSWER_SEP>"
-    SEPARATOR_OUTPUT_PAIRS = "<QA_PAIRS_SEP>"
-    all_special_tokens = [
-        SEPARATOR_INPUT_QUESTION_PREDICATE,
-        SEPARATOR_OUTPUT_ANSWERS,
-        SEPARATOR_OUTPUT_QUESTIONS,
-        SEPARATOR_OUTPUT_QUESTION_ANSWER,
-        SEPARATOR_OUTPUT_PAIRS
+    all_special_tokens = None
+    if is_t5_model:
+        # T5 model have 100 special tokens by default
+        SEPARATOR_INPUT_QUESTION_PREDICATE = "<extra_id_1>"
+        SEPARATOR_OUTPUT_ANSWERS = "<extra_id_3>"
+        SEPARATOR_OUTPUT_QUESTIONS = "<extra_id_5>"  # If using only questions
+        SEPARATOR_OUTPUT_QUESTION_ANSWER = "<extra_id_7>"
+        SEPARATOR_OUTPUT_PAIRS = "<extra_id_9>"
 
-    ]
+    else:
+        SEPARATOR_INPUT_QUESTION_PREDICATE = "<QUESTION_PREDICATE_SEP>"
+        SEPARATOR_OUTPUT_ANSWERS = "<ANSWERS_SEP>"
+        SEPARATOR_OUTPUT_QUESTIONS = "<QUESTION_SEP>"  # If using only questions
+        SEPARATOR_OUTPUT_QUESTION_ANSWER = "<QUESTION_ANSWER_SEP>"
+        SEPARATOR_OUTPUT_PAIRS = "<QA_PAIRS_SEP>"
+        all_special_tokens = [
+            SEPARATOR_INPUT_QUESTION_PREDICATE,
+            SEPARATOR_OUTPUT_ANSWERS,
+            SEPARATOR_OUTPUT_QUESTIONS,
+            SEPARATOR_OUTPUT_QUESTION_ANSWER,
+            SEPARATOR_OUTPUT_PAIRS
+        ]
 
     # Load pretrained model and tokenizer
     #

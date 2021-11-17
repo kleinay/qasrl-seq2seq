@@ -29,7 +29,7 @@ class TestStringsToObjectsParser:
         pad_token = "<pad>"
         strings_to_objects_parser = StringsToObjectsParser(MagicMock(), separator_output_answers, MagicMock(), separator_output_question_answer, separator_output_pairs, bos_token, eos_token, pad_token)
 
-        result = strings_to_objects_parser.to_qasrl_gs_csv_format(dataset, predictions)
+        result, skipped = strings_to_objects_parser.to_qasrl_gs_csv_format(dataset, predictions)
 
         assert result == [
             QuestionAnswer(

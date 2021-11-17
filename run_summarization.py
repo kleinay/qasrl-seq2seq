@@ -22,7 +22,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 
 import wandb
 import datasets
@@ -44,7 +44,7 @@ from transformers import (
     set_seed,
 )
 from transformers.file_utils import is_offline_mode
-from transformers.trainer_utils import get_last_checkpoint
+from transformers.trainer_utils import EvalPrediction, get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
@@ -132,6 +132,12 @@ class DataTrainingArguments:
     Arguments pertaining to what data we are going to input our model for training and eval.
     """
 
+    limit_train_data: Optional[float] = field(
+        default=1.0, metadata={"help": "Percentage of training samples to use during training."}
+    )
+    limit_eval_data: Optional[float] = field(
+        default=1.0, metadata={"help": "Percentage of evaluation samples (both for `evaluate` and `predict`) to use during evaluation."}
+    )
     dataset_name: Optional[str] = field(
         default=None, metadata={"help": "The name of the dataset to use (via the datasets library)."}
     )
@@ -264,7 +270,10 @@ summarization_name_mapping = {
     "xglue": ("news_body", "news_title"),
     "xsum": ("document", "summary"),
     "wiki_summary": ("article", "highlights"),
-    "qa_srl": ("sentence", "answers")
+    "qa_srl": ("sentence", "answers"),
+    "biu-nlp/qa_srl2018": ("sentence", "answers"),
+    "biu-nlp/qa_srl2020": ("sentence", "answers"),
+    "biu-nlp/qanom": ("sentence", "answers")
 }
 
 
@@ -288,7 +297,7 @@ def _freeze_parameters(model):
         param.requires_grad = True
 
 
-def main():
+def main(generate_sentence_column_in_prediction=False):
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
@@ -410,6 +419,7 @@ def main():
             SEPARATOR_OUTPUT_QUESTION_ANSWER,
             SEPARATOR_OUTPUT_PAIRS
         ]
+    unnormalized_tokens = ["``"]
 
     # Load pretrained model and tokenizer
     #
@@ -430,6 +440,7 @@ def main():
         use_auth_token=True if model_args.use_auth_token else None,
         additional_special_tokens=all_special_tokens
     )
+    tokenizer.add_tokens(unnormalized_tokens)
     model = AutoModelForSeq2SeqLM.from_pretrained(
         model_args.model_name_or_path,
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
@@ -464,7 +475,8 @@ def main():
     # Get the column names for input/target.
     dataset_columns = summarization_name_mapping.get(data_args.dataset_name, None)
     if data_args.text_column is None:
-        text_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
+        # text_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
+        text_column = 'sentence'
     else:
         text_column = data_args.text_column
         if text_column not in column_names:
@@ -472,7 +484,8 @@ def main():
                 f"--text_column' value '{data_args.text_column}' needs to be one of: {', '.join(column_names)}"
             )
     if data_args.summary_column is None:
-        summary_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
+        # summary_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
+        summary_column = 'answers'
     else:
         summary_column = data_args.summary_column
         if summary_column not in column_names:
@@ -507,13 +520,36 @@ def main():
         questions = [" ".join(x) if isinstance(x, list) else x for x in examples['question']]
         # in 2015 dataset the answers is an array, and in 2020 it is a string separated by ~!~
         targets = [x.split("~!~") if isinstance(x, str) else x for x in examples[summary_column]]
+        if 'answer_ranges' in examples:
+            # in qasrl-2018 and qanom, the answer_range is an array, 
+            answer_ranges = [x.split("~!~") if isinstance(x, str) else x for x in examples['answer_ranges']]
+        elif 'answer_range' in examples:
+            # in qasrl-2020 it is a string separated by ~!~
+            answer_ranges = [x.split("~!~") for x in examples['answer_range']]
+        else:
+            answer_ranges = [None] * len(examples)
+        if 'verb_form' in examples:
+            verb_forms = examples["verb_form"]
+        else:
+            verb_forms = [None] * len(examples)
+        if 'is_verbal' in examples:
+            is_verbals = examples["is_verbal"]
+        else:
+            is_verbals = [True] * len(examples)            
         # in 2015 dataset there is no ids so just initialize empty, and in 2020 it is qasrl_id
-        qasrl_indices = examples['qasrl_id'] if 'qasrl_id' in examples else ["" for x in examples[predicate_index_key]]
+        sent_id_keys = list({"sent_id", "qasrl_id"}.intersection(examples))
+        qasrl_ids = examples[sent_id_keys[0]] if sent_id_keys else ["" for x in examples[predicate_index_key]]
 
         predicates = examples[predicate_key]
         predicate_indices = examples[predicate_index_key]
 
-        df = pd.DataFrame([{"input": input, "predicate": predicate, "question": question, "target": target, "predicate_idx": predicate_idx, "qasrl_id": qasrl_id} for input, predicate, question, target, predicate_idx, qasrl_id in zip(inputs, predicates, questions, targets, predicate_indices, qasrl_indices)])
+        df = pd.DataFrame([{"input": input, "predicate": predicate, 
+                            "question": question, "target": target, "answer_ranges": answer_range, 
+                            "predicate_idx": predicate_idx, "qasrl_id": qasrl_id, "verb_form": verb_form, "is_verbal": is_verbal} 
+                           for input, predicate, question, target, answer_range, predicate_idx, qasrl_id, verb_form, is_verbal in 
+                           zip(inputs, predicates, questions, targets, answer_ranges, predicate_indices, qasrl_ids, verb_forms, is_verbals)
+                           if question # TODO change to is_verbal     # Don't train on non-predicates
+                           ])     
 
         grouped_df = df.groupby(['input', 'predicate'])
         inputs = grouped_df.apply(extract_inputs_func).tolist()
@@ -538,13 +574,14 @@ def main():
         model_inputs["predicates"] = grouped_df.apply(lambda x: x.iloc[0])['predicate'].tolist()
         model_inputs["predicates_indices"] = grouped_df.apply(lambda x: x.iloc[0])['predicate_idx'].tolist()
         model_inputs["sentence"] = grouped_df.apply(lambda x: x.iloc[0])['input'].tolist()
-        model_inputs["qasrl_indices"] = grouped_df.apply(lambda x: x.iloc[0])['qasrl_id'].tolist()
+        model_inputs["qasrl_id"] = grouped_df.apply(lambda x: x.iloc[0])['qasrl_id'].tolist()
         return model_inputs
 
     preprocess_function_map = {
         "input": preprocessor.extract_inputs,
         "first_two_question_answer": preprocessor.extract_targets_only_first_two_question_answers,
-        "all": preprocessor.extract_targets_all
+        "all": preprocessor.extract_targets_all,
+        "all_by_answer_ordering": preprocessor.extract_targets_all_by_answer_ordering
     }
 
     preprocess_function = lambda x: preprocess_function__questions_answers(x, preprocess_function_map[model_args.preprocess_input_func], preprocess_function_map[model_args.preprocess_output_func])
@@ -556,6 +593,8 @@ def main():
         train_dataset = raw_datasets["train"]
         if data_args.max_train_samples is not None:
             train_dataset = train_dataset.select(range(data_args.max_train_samples))
+        if data_args.limit_train_data is not None:
+            train_dataset = train_dataset.select(range(int(len(train_dataset)*data_args.limit_train_data)))
         with training_args.main_process_first(desc="train dataset map pre-processing"):
             train_dataset = train_dataset.map(
                 preprocess_function,
@@ -565,6 +604,10 @@ def main():
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="Running tokenizer on train dataset",
             )
+        # log a sample of training instances 
+        data_examples = train_dataset[:3]
+        for i, dt_ex in enumerate(data_examples):
+            logger.info(f"Data example ({i}): {dt_ex}") 
 
     if training_args.do_eval:
         max_target_length = data_args.val_max_target_length
@@ -622,9 +665,8 @@ def main():
 
         return preds, labels
 
-    def compute_metrics(eval_preds):
+    def compute_metrics(eval_preds: EvalPrediction):
         logger.info("__Computing metrics__")
-        print("__Computing metrics__")
         preds, labels = eval_preds
         if isinstance(preds, tuple):
             preds = preds[0]
@@ -643,6 +685,12 @@ def main():
 
         prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
         result["gen_len"] = np.mean(prediction_lens)
+        
+        # log to wandb some of the evaluation measures
+        measures_to_send_wandb = ["rouge1", "rouge2", "gen_len"]
+        wandb_results = {k:v for k,v in result.items() if k in measures_to_send_wandb}
+        wandb.log(wandb_results)
+        
         result = {k: round(v, 4) for k, v in result.items()}
         return result
 
@@ -653,6 +701,10 @@ def main():
             eval_dataset = eval_dataset.shuffle(seed=42).select(range(5))
         if training_args.do_predict:
             predict_dataset = predict_dataset.shuffle(seed=42).select(range(5))
+
+    # Modify training_args before initializing Trainer, to allow evaluation during training
+    training_args.evaluation_strategy = 'steps' # 'no', 'epoch' or 'steps'
+    training_args.eval_steps = 100       
 
     # Initialize our Trainer
     trainer = Seq2SeqTrainer(
@@ -716,6 +768,7 @@ def main():
     )
 
     output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.csv")
+    invalid_output_prediction_file = os.path.join(training_args.output_dir, "invalid_generated_predictions.csv")
     if training_args.do_predict:
         _clean_mem()
         logger.info("*** Predict ***")
@@ -737,13 +790,41 @@ def main():
 
         if trainer.is_world_process_zero():
             if training_args.predict_with_generate:
+                logger.info(f"length of predict_results.predictions: {len(predict_results.predictions)}")
                 logger.info("__Writing to file__")
                 predictions = tokenizer.batch_decode(
                     predict_results.predictions, skip_special_tokens=False, clean_up_tokenization_spaces=True
                 )
+                # Log example instance 
+                i = 0
+                logger.info(f"\n\n**      Example (idx: {i}):      **")
+                logger.info(f"* Input Seq:\t\t {tokenizer.decode(predict_dataset[i]['input_ids'])}")
+                logger.info(f"* Gold Output:\t\t {tokenizer.decode(predict_dataset[i]['labels'])}")
+                logger.info(f"* Predicted Output:\t {predictions[i].rstrip('<pad>')}")
+                
 
-                examples: List[QuestionAnswer] = strings_to_objects_parser.to_qasrl_gs_csv_format(predict_dataset, predictions)
-                pd.DataFrame([x.to_dict() for x in examples]).to_csv(output_prediction_file, index=False)
+                predicted_QAs: List[QuestionAnswer]; invalid_pred_seqs: List[str] 
+                predicted_QAs, invalid_pred_seqs = strings_to_objects_parser.to_qasrl_gs_csv_format(predict_dataset, predictions)
+                prediction_output = pd.DataFrame([x.to_dict() for x in predicted_QAs])
+                # Log invalid output sequences
+                logger.info(f"Number of invalid (mal-structued) predicted output sequences: {len(invalid_pred_seqs)} (%{100*len(invalid_pred_seqs)/len(predictions):.1f})"
+                            f"\n  Saving them into {invalid_output_prediction_file}")
+                pd.DataFrame(invalid_pred_seqs, columns=["Error-type", "output"]).to_csv(invalid_output_prediction_file, index=False)
+                wandb.save(invalid_output_prediction_file)
+
+                if generate_sentence_column_in_prediction and len(prediction_output)>0:
+                    qasrl_id2sent = {r["qasrl_id"]:r["sentence"] for r in predict_dataset}
+                    prediction_output['sentence'] = prediction_output['qasrl_id'].apply(qasrl_id2sent.get) # predict_dataset['qasrl_id']
+                
+                logger.info(f"Saving predictions into {output_prediction_file}...")
+                if len(prediction_output) == 0:
+                    # write empty csv with correct header
+                    header = "qasrl_id,verb_idx,verb,question,answer,answer_range,verb_form,wh,aux,subj,obj,prep,obj2,is_negated,is_passive,sentence"
+                    with open(output_prediction_file, "w") as fout:
+                        fout.write(header)
+                else:
+                    prediction_output.to_csv(output_prediction_file, index=False) 
+                wandb.save(output_prediction_file)
         
     if training_args.push_to_hub:
         kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "summarization"}

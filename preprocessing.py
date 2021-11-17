@@ -30,18 +30,40 @@ class Preprocessor:
         self.eos_token = eos_token
 
     def extract_inputs(self, x: pd.DataFrame) -> str:
-        # all rows have the same index values because of the groupby
-        any_row = x.iloc[0]
-        return f"{any_row['input']}{self.separator_input_question_predicate}{any_row['predicate']}"
+        # all rows have the same index values (and predicate-tailored info) because of the groupby
+        row = x.iloc[0]
+        sentence = row.input
+        sent_tokens = sentence.split(" ") 
+        sentence_before_predicate = " ".join([sent_tokens[i] for i in range(int(row.predicate_idx))])
+        predicate = row.predicate
+        sentence_after_predicate = " ".join([sent_tokens[i] for i in range(int(row.predicate_idx)+1, len(sent_tokens))])
+        if row.verb_form is not None:
+            # embed also the verb_form
+            return f"{sentence_before_predicate} {predicate} {sentence_after_predicate} {self.separator_input_question_predicate} {predicate} | {row.verb_form} "
+        else:
+            return f"{sentence_before_predicate} {predicate} {sentence_after_predicate} {self.separator_input_question_predicate} {predicate} "
         #             return f"{any_row['input']}{tokenizer.eos_token}{any_row['predicate']}"
 
     def extract_targets_all(self, x: pd.DataFrame) -> str:
         """
         Extracts ((question, answers), ...)
         """
+        qa_reprs = [f"{q}{self.separator_output_question_answer}{self._flatten_targets(t)}" for q, t in zip(x.question, x.target)]
+        return f"{self.separator_output_pairs}".join(qa_reprs)
 
-        return f"{self.separator_output_pairs}".join([f"{q}{self.separator_output_question_answer}{self._flatten_targets(t)}" for q, t in zip(x.question, x.target)])
-
+    def extract_targets_all_by_answer_ordering(self, x: pd.DataFrame) -> str:
+        """
+        Extracts ((question, answers), ...)
+        """
+        qas = list(zip(x.question, x.target, x.answer_ranges))
+        # sort QAs by answer indices
+        def sort_by_range(triplet):
+            q,a,ranges=triplet
+            return min(ranges) if ranges else 0
+        qas = sorted(qas, key=sort_by_range)
+        qa_reprs = [f"{q}{self.separator_output_question_answer}{self._flatten_targets(t)}" for q, t, _ in qas]
+        return f"{self.separator_output_pairs}".join(qa_reprs)
+     
     def extract_targets_only_answers(self, x: pd.DataFrame) -> str:
         """
         Extracts (answer, answer, ...)

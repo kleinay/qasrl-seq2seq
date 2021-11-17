@@ -1,3 +1,6 @@
 [submodule "qasrl_gs"]
 	path = qasrl_gs
 	url = git@github.com:eranhirs/qasrl-gs.git
+[submodule "QANom"]
+	path = QANom
+	url = https://github.com/kleinay/QANom.git

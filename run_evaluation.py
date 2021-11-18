@@ -29,7 +29,7 @@ def evaluate_qanom(model_dir: str, wandb_run_name: Optional[str]):
     df_generated_predictions = read_annot_csv(f"{model_dir}/generated_predictions.csv")
     df_parsed_outputs = read_annot_csv(f"{model_dir}/output_file.csv")
     # these two DFs correspond at the row level
-    set_sentence_columns(df_parsed_outputs, df_generated_predictions)
+    set_sentence_columns(df_parsed_outputs, qanom_test_df)
     set_key_column(df_parsed_outputs)
     rename_column(df_parsed_outputs, 'verb_idx', 'target_idx')
     rename_column(df_parsed_outputs, 'verb', 'noun')

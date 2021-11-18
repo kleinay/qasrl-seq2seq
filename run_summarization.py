@@ -512,6 +512,7 @@ def main(generate_sentence_column_in_prediction=False):
 
     def preprocess_function__questions_answers(examples, extract_inputs_func, extract_outputs_func):
         inputs = examples[text_column]
+        batch_size = len(inputs)
         # in 2015 dataset the column is predicate, and in 2020 it is verb
         predicate_key = 'predicate' if 'predicate' in examples else 'verb'
         # in 2015 dataset it is predicate_idx, and in 2020 it is verb_idx
@@ -527,15 +528,15 @@ def main(generate_sentence_column_in_prediction=False):
             # in qasrl-2020 it is a string separated by ~!~
             answer_ranges = [x.split("~!~") for x in examples['answer_range']]
         else:
-            answer_ranges = [None] * len(examples)
+            answer_ranges = [None] * batch_size
         if 'verb_form' in examples:
             verb_forms = examples["verb_form"]
         else:
-            verb_forms = [None] * len(examples)
+            verb_forms = [None] * batch_size
         if 'is_verbal' in examples:
             is_verbals = examples["is_verbal"]
         else:
-            is_verbals = [True] * len(examples)            
+            is_verbals = [True] * batch_size            
         # in 2015 dataset there is no ids so just initialize empty, and in 2020 it is qasrl_id
         sent_id_keys = list({"sent_id", "qasrl_id"}.intersection(examples))
         qasrl_ids = examples[sent_id_keys[0]] if sent_id_keys else ["" for x in examples[predicate_index_key]]

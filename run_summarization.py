@@ -23,6 +23,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Tuple
+from datasets.arrow_dataset import Dataset
 
 import wandb
 import datasets
@@ -271,7 +272,7 @@ summarization_name_mapping = {
     "xsum": ("document", "summary"),
     "wiki_summary": ("article", "highlights"),
     "qa_srl": ("sentence", "answers"),
-    "biu-nlp/qa_srl2018": ("sentence", "answers"),
+    "kleinay/qa_srl2018": ("sentence", "answers"),  # kleinay's version have aligned features with qanom 
     "biu-nlp/qa_srl2020": ("sentence", "answers"),
     "biu-nlp/qanom": ("sentence", "answers")
 }
@@ -323,7 +324,7 @@ def main(generate_sentence_column_in_prediction=False):
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
     
-    run = setup_wandb("wandb" in training_args.report_to, model_args.wandb_run_name)
+    run = wandb.run or setup_wandb("wandb" in training_args.report_to, model_args.wandb_run_name)
 
     # Log on each process the small summary:
     logger.warning(
@@ -377,10 +378,40 @@ def main(generate_sentence_column_in_prediction=False):
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
     if data_args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        raw_datasets = load_dataset(
-            data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
-        )
+        # Optionally, dataset_name is a list, given in the form [dataset_1, dataset_2, ...]
+        if data_args.dataset_name.startswith("["):  
+            source_datasets_names = data_args.dataset_name[1:-1].split(",")
+            source_datasets = [load_dataset(dataset_name.strip(), data_args.dataset_config_name, cache_dir=model_args.cache_dir)
+                               for dataset_name in source_datasets_names]
+            raw_datasets = datasets.DatasetDict({
+                split: datasets.interleave_datasets([dataset[split] for dataset in source_datasets])
+                for split in source_datasets[0]
+            })
+        # Optionally, dataset_name is a dict, specifying different datasets for different splits,
+        # given in the form {train: dataset_1, dataset_2; validation: ...; test: ...}
+        elif data_args.dataset_name.startswith("{"):
+            def load_dataset_with_predicate_type(dataset_name, split) -> Dataset:
+                dataset = load_dataset(dataset_name.strip(), data_args.dataset_config_name, cache_dir=model_args.cache_dir)[split]
+                predicate_type = "nominal" if dataset_name == "qanom" else "verbal"
+                dataset = dataset.add_column("predicate_type", [predicate_type]*len(dataset))
+                return dataset
+            split_datasets_str = data_args.dataset_name[1:-1].split("; ")
+            datasets_str_per_split = dict([d.split(":") for d in split_datasets_str])
+            datasets_names_per_split = {spl: datasets.split(",") 
+                                        for spl, datasets in datasets_str_per_split.items()}
+            datasets_loaded_per_split = {spl: [load_dataset_with_predicate_type(dataset_name, spl)
+                                               for dataset_name in datasets_names]
+                                         for spl, datasets_names in datasets_names_per_split.items()}
+            raw_datasets = datasets.DatasetDict({
+                split: datasets.interleave_datasets(source_datasets)
+                for split, source_datasets in datasets_loaded_per_split.items()
+            })
+            
+        # Downloading and loading a single dataset from the hub.
+        else:
+            raw_datasets = load_dataset(
+                data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
+            )
     else:
         data_files = {}
         if data_args.train_file is not None:
@@ -405,6 +436,9 @@ def main(generate_sentence_column_in_prediction=False):
         SEPARATOR_OUTPUT_QUESTIONS = "<extra_id_5>"  # If using only questions
         SEPARATOR_OUTPUT_QUESTION_ANSWER = "<extra_id_7>"
         SEPARATOR_OUTPUT_PAIRS = "<extra_id_9>"
+        PREDICATE_GENERIC_MARKER = "<extra_id_10>" 
+        PREDICATE_VERB_MARKER = "<extra_id_11>" 
+        PREDICATE_NOMINALIZATION_MARKER = "<extra_id_12>" 
 
     else:
         SEPARATOR_INPUT_QUESTION_PREDICATE = "<QUESTION_PREDICATE_SEP>"
@@ -412,12 +446,18 @@ def main(generate_sentence_column_in_prediction=False):
         SEPARATOR_OUTPUT_QUESTIONS = "<QUESTION_SEP>"  # If using only questions
         SEPARATOR_OUTPUT_QUESTION_ANSWER = "<QUESTION_ANSWER_SEP>"
         SEPARATOR_OUTPUT_PAIRS = "<QA_PAIRS_SEP>"
+        PREDICATE_GENERIC_MARKER = "<PREDICATE_MARKER>" 
+        PREDICATE_VERB_MARKER = "<VERBAL_PREDICATE_MARKER>" 
+        PREDICATE_NOMINALIZATION_MARKER = "<NOMINALIZATION_PREDICATE_MARKER>" 
         all_special_tokens = [
             SEPARATOR_INPUT_QUESTION_PREDICATE,
             SEPARATOR_OUTPUT_ANSWERS,
             SEPARATOR_OUTPUT_QUESTIONS,
             SEPARATOR_OUTPUT_QUESTION_ANSWER,
-            SEPARATOR_OUTPUT_PAIRS
+            SEPARATOR_OUTPUT_PAIRS,
+            PREDICATE_GENERIC_MARKER, 
+            PREDICATE_VERB_MARKER,
+            PREDICATE_NOMINALIZATION_MARKER
         ]
     unnormalized_tokens = ["``"]
 
@@ -508,6 +548,9 @@ def main(generate_sentence_column_in_prediction=False):
                  SEPARATOR_OUTPUT_QUESTIONS,
                  SEPARATOR_OUTPUT_QUESTION_ANSWER,
                  SEPARATOR_OUTPUT_PAIRS,
+                 PREDICATE_GENERIC_MARKER, 
+                 PREDICATE_VERB_MARKER,
+                 PREDICATE_NOMINALIZATION_MARKER,
                  tokenizer.eos_token)
 
     def preprocess_function__questions_answers(examples, extract_inputs_func, extract_outputs_func):
@@ -580,6 +623,7 @@ def main(generate_sentence_column_in_prediction=False):
 
     preprocess_function_map = {
         "input": preprocessor.extract_inputs,
+        "input_predicate_marker": preprocessor.extract_inputs_predicate_inline_marker,
         "first_two_question_answer": preprocessor.extract_targets_only_first_two_question_answers,
         "all": preprocessor.extract_targets_all,
         "all_by_answer_ordering": preprocessor.extract_targets_all_by_answer_ordering
@@ -654,7 +698,8 @@ def main(generate_sentence_column_in_prediction=False):
     )
 
     # Metric
-    metric = load_metric("rouge")
+    rouge_metric = load_metric("rouge")
+    exact_match_metric = load_metric("metrics/exact_match.py")
 
     def postprocess_text(preds, labels):
         preds = [pred.strip() for pred in preds]
@@ -680,15 +725,18 @@ def main(generate_sentence_column_in_prediction=False):
         # Some simple post-processing
         decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
 
-        result = metric.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
+        result = rouge_metric.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
         # Extract a few results from ROUGE
         result = {key: value.mid.fmeasure * 100 for key, value in result.items()}
 
         prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
         result["gen_len"] = np.mean(prediction_lens)
+        # Compute exact match
+        em_results = exact_match_metric.compute(predictions=decoded_preds, references=decoded_labels)
+        result["exact_match"] = em_results['accuracy']
         
         # log to wandb some of the evaluation measures
-        measures_to_send_wandb = ["rouge1", "rouge2", "gen_len"]
+        measures_to_send_wandb = ["rouge1", "rouge2", "gen_len", "exact_match"]
         wandb_results = {k:v for k,v in result.items() if k in measures_to_send_wandb}
         wandb.log(wandb_results)
         
@@ -810,8 +858,12 @@ def main(generate_sentence_column_in_prediction=False):
                 # Log invalid output sequences
                 logger.info(f"Number of invalid (mal-structued) predicted output sequences: {len(invalid_pred_seqs)} (%{100*len(invalid_pred_seqs)/len(predictions):.1f})"
                             f"\n  Saving them into {invalid_output_prediction_file}")
-                pd.DataFrame(invalid_pred_seqs, columns=["Error-type", "output"]).to_csv(invalid_output_prediction_file, index=False)
+                invalid_pred_df = pd.DataFrame(invalid_pred_seqs, columns=["Error-type", "output"])
+                invalid_pred_df.to_csv(invalid_output_prediction_file, index=False)
                 wandb.save(invalid_output_prediction_file)
+                invalid_types_relative_frequency = invalid_pred_df["Error-type"].value_counts()/len(predictions)
+                invalid_types_relative_frequency = invalid_types_relative_frequency.to_frame().transpose()
+                wandb.log({"invalid output sequences - relative frequency": invalid_types_relative_frequency}, commit=False)
 
                 if generate_sentence_column_in_prediction and len(prediction_output)>0:
                     qasrl_id2sent = {r["qasrl_id"]:r["sentence"] for r in predict_dataset}
@@ -839,7 +891,7 @@ def main(generate_sentence_column_in_prediction=False):
 
         trainer.push_to_hub(**kwargs)
         
-    run.finish()
+    # run.finish()
 
     return results, run
 

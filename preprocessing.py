@@ -20,6 +20,9 @@ class Preprocessor:
                  separator_output_questions: str,
                  separator_output_question_answer: str,
                  separator_output_pairs: str,
+                 marker_generic_predicate: str,
+                 marker_verbal_predicate: str,
+                 marker_nominalization_predicate: str,
                  eos_token: str
                  ):
         self.separator_input_question_predicate = separator_input_question_predicate
@@ -27,22 +30,71 @@ class Preprocessor:
         self.separator_output_questions = separator_output_questions
         self.separator_output_question_answer = separator_output_question_answer
         self.separator_output_pairs = separator_output_pairs
+        self.marker_generic_predicate = marker_generic_predicate
+        self.marker_verbal_predicate = marker_verbal_predicate
+        self.marker_nominalization_predicate = marker_nominalization_predicate
         self.eos_token = eos_token
 
+    """
+    Input Sequence preprocessing:
+    """
+    
     def extract_inputs(self, x: pd.DataFrame) -> str:
+        """ Encode predicate by repeating it at the end of sequence """
         # all rows have the same index values (and predicate-tailored info) because of the groupby
         row = x.iloc[0]
+        sentence_before_predicate, predicate, sentence_after_predicate = self._get_splitted_sentence_by_predicate(row)
+        seq = f"{sentence_before_predicate} {predicate} {sentence_after_predicate} {self.separator_input_question_predicate} {predicate}"
+        # embed also the verb_form
+        seq = self._append_verb_form(seq, row)
+        
+        # append predicate_type
+        if "predicate_type" in row:
+            seq = f'{row["predicate_type"]} | {seq}' 
+        return seq
+    
+    def extract_inputs_predicate_inline_marker(self, x: pd.DataFrame) -> str:
+        """ Encode predicate by prefixing it with a marker """
+        # all rows have the same index values (and predicate-tailored info) because of the groupby
+        row = x.iloc[0]
+        sentence_before_predicate, predicate, sentence_after_predicate = self._get_splitted_sentence_by_predicate(row)
+        
+        # prepare predicate marker
+        """ In case we want a generic marker for all predicate types: """
+        predicate_marker = self.marker_generic_predicate    
+        """ In case we want special marker for each predicate type: """
+        if "predicate_type" in row:
+            predicate_marker = {"verbal": self.marker_verbal_predicate, 
+                                "nominal": self.marker_nominalization_predicate
+                                }[row["predicate_type"]]
+        seq = f"{sentence_before_predicate} {predicate_marker} {predicate} {sentence_after_predicate}"
+        
+        # embed also the verb_form
+        # In this function, since we don't repeat the predicate, separator_input_question_predicate prefixes the verb_form
+        seq = self._append_verb_form(seq, row)
+        
+        # append predicate_type (if not captured by in predicate_marker)
+        if "predicate_type" in row and predicate_marker == self.marker_generic_predicate:
+            seq = f'{row["predicate_type"]} | {seq}' 
+        return seq
+    
+    def _get_splitted_sentence_by_predicate(self, row: pd.Series):
         sentence = row.input
         sent_tokens = sentence.split(" ") 
         sentence_before_predicate = " ".join([sent_tokens[i] for i in range(int(row.predicate_idx))])
         predicate = row.predicate
         sentence_after_predicate = " ".join([sent_tokens[i] for i in range(int(row.predicate_idx)+1, len(sent_tokens))])
-        if row.verb_form is not None:
-            # embed also the verb_form
-            return f"{sentence_before_predicate} {predicate} {sentence_after_predicate} {self.separator_input_question_predicate} {predicate} | {row.verb_form} "
+        return sentence_before_predicate, predicate, sentence_after_predicate
+        
+    def _append_verb_form(self, seq: str, df_row: pd.Series):
+        if "verb_form" not in df_row or df_row.verb_form is None:
+            return f"{seq} "
         else:
-            return f"{sentence_before_predicate} {predicate} {sentence_after_predicate} {self.separator_input_question_predicate} {predicate} "
-        #             return f"{any_row['input']}{tokenizer.eos_token}{any_row['predicate']}"
+            return f"{seq} {self.separator_input_question_predicate} {df_row.verb_form} "
+    
+    """
+    Output Sequence preprocessing:
+    """        
 
     def extract_targets_all(self, x: pd.DataFrame) -> str:
         """

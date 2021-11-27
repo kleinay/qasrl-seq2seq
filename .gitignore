@@ -1,2 +1,11 @@
 .idea/
+.vscode/
+.metals/
+*.ipynb_checkpoints*
+__pycache__/
 wandb/
+trained_models/
+qasrl_gs/
+QANom/
+datasets/
+tmp*

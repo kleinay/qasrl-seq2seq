@@ -8,7 +8,8 @@ from utils import setup_wandb
 
 
 def evaluate_qasrl(model_dir, input_gold_file, input_prediction_file, input_sentences_path: Optional[str], wandb_run_name: Optional[str]):
-    setup_wandb(wandb_run_name is not None, wandb_run_name)
+    if not wandb_run_name:
+        setup_wandb(wandb_run_name is not None, wandb_run_name)
     arg, larg, role = qasrl_eval(proposed_path=input_prediction_file, reference_path=input_gold_file, sents_path=input_sentences_path)
     eval_fn = f"{model_dir}/evaluation_qasrl.txt"
     write_evaluation_to_file(eval_fn, arg, larg, role)
@@ -16,14 +17,15 @@ def evaluate_qasrl(model_dir, input_gold_file, input_prediction_file, input_sent
     return arg, larg, role
 
 def evaluate_qanom(model_dir: str, wandb_run_name: Optional[str]):
-    setup_wandb(wandb_run_name is not None, wandb_run_name)
+    if not wandb_run_name:
+        setup_wandb(wandb_run_name is not None, wandb_run_name)
     import pandas as pd, numpy as np
     from qanom.annotations.common import read_annot_csv, set_sentence_columns, set_key_column
     from qanom.utils import rename_column
     from qanom.evaluation.evaluate import eval_datasets as qanom_evaluate, get_recall_and_precision_mistakes, Metrics
     
     if len(pd.read_csv(f"{model_dir}/generated_predictions.csv"))==0 or len(pd.read_csv(f"{model_dir}/output_file.csv"))==0:
-        return Metrics.empty(), Metrics.empty(), Metrics.empty()
+        return Metrics(0,0,1), Metrics(0,0,1), Metrics(0,0,1)
     
     qanom_test_df = read_annot_csv("QANom/dataset/annot.test.csv")
     df_generated_predictions = read_annot_csv(f"{model_dir}/generated_predictions.csv")
@@ -33,18 +35,18 @@ def evaluate_qanom(model_dir: str, wandb_run_name: Optional[str]):
     set_key_column(df_parsed_outputs)
     rename_column(df_parsed_outputs, 'verb_idx', 'target_idx')
     rename_column(df_parsed_outputs, 'verb', 'noun')
-
     df_parsed_outputs['is_verbal'] = True
     df_parsed_outputs['verb_form'] = ' '
     # drop rows of invalid questins (failing the state machine)
     df_is_invalid_question = df_parsed_outputs.question=="--Invalid Output--"
     n_invalid_question = df_is_invalid_question.sum()
-    percent_invalid_question = 100*n_invalid_question / df_parsed_outputs.shape[0]
+    percent_invalid_question = (100*n_invalid_question / df_parsed_outputs.shape[0]).item()
     df_invalid_questions = df_generated_predictions[df_is_invalid_question]
     invalid_questions_fn = f"{model_dir}/invalid_output_questions.csv"
     df_invalid_questions.to_csv(invalid_questions_fn, index=False)
     print(f"{n_invalid_question} generated questions ({percent_invalid_question:.2}%) were judged invalid by the qasrl-state-machine. \n"
         f"Check them out here:  {invalid_questions_fn}")
+    wandb.log({"invalid output questions - relative proportion": percent_invalid_question}, commit=False) # relative to number of all parsed QAs
     wandb.save(invalid_questions_fn)
     df_parsed_outputs = df_parsed_outputs[~df_is_invalid_question]
     # Add empty predictions for all instances from gold test not in predicted output, so that evaluation will count them as FN
@@ -76,6 +78,12 @@ def write_evaluation_to_file(fn, arg, larg, role):
         fout.write(f"arg-f1 \t\t\t{100*arg.prec():.1f}\t{100*arg.recall():.1f}\t{100*arg.f1():.2f}\n") 
         fout.write(f"labeled-arg-f1 \t\t{100*larg.prec():.1f}\t{100*larg.recall():.1f}\t{100*larg.f1():.2f}\n") 
         fout.write(f"role-f1 \t\t{100*role.prec():.1f}\t{100*role.recall():.1f}\t{100*role.f1():.2f}\n") 
+        
+def print_evaluations(arg, larg, role):
+    print("\n\t\t\tPrec\tRecall\tF1\n") 
+    print(f"arg-f1 \t\t\t{100*arg.prec():.1f}\t{100*arg.recall():.1f}\t{100*arg.f1():.2f}\n") 
+    print(f"labeled-arg-f1 \t\t{100*larg.prec():.1f}\t{100*larg.recall():.1f}\t{100*larg.f1():.2f}\n") 
+    print(f"role-f1 \t\t{100*role.prec():.1f}\t{100*role.recall():.1f}\t{100*role.f1():.2f}\n") 
 
 if __name__ == "__main__":
     ap = ArgumentParser()

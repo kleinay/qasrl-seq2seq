@@ -1,3 +1,4 @@
+from builtins import ValueError
 from dataclasses import dataclass
 from typing import List
 
@@ -36,6 +37,25 @@ class Preprocessor:
         self.eos_token = eos_token
 
     """
+    Prefix for Sequence preprocessing:
+    """
+    def get_sequence_prefix(self, x: pd.DataFrame, prefix_or_prefixing_method: str) -> str:
+        row = x.iloc[0]
+        if prefix_or_prefixing_method is None:
+            return ''
+        if not prefix_or_prefixing_method.startswith("<"):  # Regular prefix - not dependent on input row x
+            return prefix_or_prefixing_method
+        if prefix_or_prefixing_method == "<predicate-type>":
+            if "predicate_type" not in row:
+                raise ValueError("source_prefix is '<predicate-type>' but input row has no 'predicate_type' attribute.")
+            else:
+                pred_type = x["predicate_type"]
+                return f"Generate QAs for {pred_type} QASRL: "
+        
+        
+        raise ValueError(f"source_prefix '{prefix_or_prefixing_method}' starts with '<' but does not correspond to a valid prefixing method. ")
+
+    """
     Input Sequence preprocessing:
     """
     
@@ -49,8 +69,8 @@ class Preprocessor:
         seq = self._append_verb_form(seq, row)
         
         # append predicate_type
-        if "predicate_type" in row:
-            seq = f'{row["predicate_type"]} | {seq}' 
+        # if "predicate_type" in row:   # only if we train on joint-qasrl/joint-qanom datatset
+        #     seq = f'{row["predicate_type"]} | {seq}' 
         return seq
     
     def extract_inputs_predicate_inline_marker(self, x: pd.DataFrame) -> str:
@@ -91,6 +111,10 @@ class Preprocessor:
             return f"{seq} "
         else:
             return f"{seq} {self.separator_input_question_predicate} {df_row.verb_form} "
+    
+    def extract_qadiscourse_inputs(self, x: pd.DataFrame) -> str:
+        #TODO
+        pass
     
     """
     Output Sequence preprocessing:
@@ -152,6 +176,10 @@ class Preprocessor:
         x = x.iloc[0]
 
         return str([f"{q}{self.separator_output_question_answer}{t[0]}" for q, t in zip([x.question], [x.target])])
+
+    def extract_qadiscourse_targets(self, x: pd.DataFrame) -> str:
+        #TODO
+        pass
 
     def _flatten_targets(self, targets: List[str]) -> str:
         return f"{self.separator_output_answers}".join(targets)

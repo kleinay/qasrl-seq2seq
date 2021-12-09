@@ -24,6 +24,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Tuple
 from datasets.arrow_dataset import Dataset
+from datasets.dataset_dict import DatasetDict
 
 import wandb
 import datasets
@@ -377,24 +378,43 @@ def main(generate_sentence_column_in_prediction=False):
     #
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
+    def get_predicate_type_label_from_dataset_name(dataset_name) -> str:
+        if "qa_srl" in dataset_name:
+            predicate_type = "verbal" 
+        elif "qanom" in dataset_name: 
+            predicate_type = "nominal"
+        elif "qadiscourse" in dataset_name:
+            predicate_type = "discourse"
+        else:
+            raise ValueError(f"dataset {dataset_name.strip()} is not supported shen setting predicate_type feature")
+        return predicate_type
+    
+    def load_dataset_with_predicate_type(dataset_name, split) -> Dataset:
+        dataset = load_dataset(dataset_name.strip(), data_args.dataset_config_name, cache_dir=model_args.cache_dir)[split]
+        predicate_type = get_predicate_type_label_from_dataset_name(dataset_name)
+        dataset = dataset.add_column("predicate_type", [predicate_type]*len(dataset))
+        return dataset
+
+    def load_dataset_dict_with_predicate_type(dataset_name) -> DatasetDict:
+        predicate_type = get_predicate_type_label_from_dataset_name(dataset_name)
+        dataset_dict = load_dataset(dataset_name.strip(), data_args.dataset_config_name, cache_dir=model_args.cache_dir)
+        dataset_dict = {split: dataset.add_column("predicate_type", [predicate_type]*len(dataset))
+                        for split, dataset in dataset_dict.items()}
+        return dataset_dict    
+    
     if data_args.dataset_name is not None:
         # Optionally, dataset_name is a list, given in the form [dataset_1, dataset_2, ...]
         if data_args.dataset_name.startswith("["):  
             source_datasets_names = data_args.dataset_name[1:-1].split(",")
-            source_datasets = [load_dataset(dataset_name.strip(), data_args.dataset_config_name, cache_dir=model_args.cache_dir)
+            source_dataset_dicts = [load_dataset_dict_with_predicate_type(dataset_name)
                                for dataset_name in source_datasets_names]
             raw_datasets = datasets.DatasetDict({
-                split: datasets.interleave_datasets([dataset[split] for dataset in source_datasets])
-                for split in source_datasets[0]
+                split: datasets.interleave_datasets([dataset[split] for dataset in source_dataset_dicts])
+                for split in source_dataset_dicts[0]
             })
         # Optionally, dataset_name is a dict, specifying different datasets for different splits,
         # given in the form {train: dataset_1, dataset_2; validation: ...; test: ...}
         elif data_args.dataset_name.startswith("{"):
-            def load_dataset_with_predicate_type(dataset_name, split) -> Dataset:
-                dataset = load_dataset(dataset_name.strip(), data_args.dataset_config_name, cache_dir=model_args.cache_dir)[split]
-                predicate_type = "nominal" if dataset_name == "qanom" else "verbal"
-                dataset = dataset.add_column("predicate_type", [predicate_type]*len(dataset))
-                return dataset
             split_datasets_str = data_args.dataset_name[1:-1].split("; ")
             datasets_str_per_split = dict([d.split(":") for d in split_datasets_str])
             datasets_names_per_split = {spl: datasets.split(",") 
@@ -409,9 +429,7 @@ def main(generate_sentence_column_in_prediction=False):
             
         # Downloading and loading a single dataset from the hub.
         else:
-            raw_datasets = load_dataset(
-                data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
-            )
+            raw_datasets = load_dataset_dict_with_predicate_type(data_args.dataset_name)
     else:
         data_files = {}
         if data_args.train_file is not None:
@@ -553,6 +571,8 @@ def main(generate_sentence_column_in_prediction=False):
                  PREDICATE_NOMINALIZATION_MARKER,
                  tokenizer.eos_token)
 
+    prefix_preprocessing_func = lambda x: preprocessor.get_sequence_prefix(x, data_args.source_prefix)
+
     def preprocess_function__questions_answers(examples, extract_inputs_func, extract_outputs_func):
         inputs = examples[text_column]
         batch_size = len(inputs)
@@ -579,7 +599,9 @@ def main(generate_sentence_column_in_prediction=False):
         if 'is_verbal' in examples:
             is_verbals = examples["is_verbal"]
         else:
-            is_verbals = [True] * batch_size            
+            is_verbals = [True] * batch_size    
+            
+        pred_types = examples["predicate_type"]        
         # in 2015 dataset there is no ids so just initialize empty, and in 2020 it is qasrl_id
         sent_id_keys = list({"sent_id", "qasrl_id"}.intersection(examples))
         qasrl_ids = examples[sent_id_keys[0]] if sent_id_keys else ["" for x in examples[predicate_index_key]]
@@ -589,9 +611,10 @@ def main(generate_sentence_column_in_prediction=False):
 
         df = pd.DataFrame([{"input": input, "predicate": predicate, 
                             "question": question, "target": target, "answer_ranges": answer_range, 
-                            "predicate_idx": predicate_idx, "qasrl_id": qasrl_id, "verb_form": verb_form, "is_verbal": is_verbal} 
-                           for input, predicate, question, target, answer_range, predicate_idx, qasrl_id, verb_form, is_verbal in 
-                           zip(inputs, predicates, questions, targets, answer_ranges, predicate_indices, qasrl_ids, verb_forms, is_verbals)
+                            "predicate_idx": predicate_idx, "qasrl_id": qasrl_id, 
+                            "verb_form": verb_form, "is_verbal": is_verbal, "predicate_type": pred_type} 
+                           for input, predicate, question, target, answer_range, predicate_idx, qasrl_id, verb_form, is_verbal, pred_type in 
+                           zip(inputs, predicates, questions, targets, answer_ranges, predicate_indices, qasrl_ids, verb_forms, is_verbals, pred_types)
                            if question # TODO change to is_verbal     # Don't train on non-predicates
                            ])     
 
@@ -599,7 +622,10 @@ def main(generate_sentence_column_in_prediction=False):
         inputs = grouped_df.apply(extract_inputs_func).tolist()
         targets = grouped_df.apply(extract_outputs_func).tolist()
 
-        inputs = [prefix + inp for inp in inputs]
+        # integrate prefix into input sequences
+        prefixes = grouped_df.apply(prefix_preprocessing_func).tolist()
+        inputs = [prefix + inp for inp, prefix in zip(inputs, prefixes)]
+        
         model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
 
         # Setup the tokenizer for targets
@@ -626,9 +652,11 @@ def main(generate_sentence_column_in_prediction=False):
         "input_predicate_marker": preprocessor.extract_inputs_predicate_inline_marker,
         "first_two_question_answer": preprocessor.extract_targets_only_first_two_question_answers,
         "all": preprocessor.extract_targets_all,
-        "all_by_answer_ordering": preprocessor.extract_targets_all_by_answer_ordering
+        "all_by_answer_ordering": preprocessor.extract_targets_all_by_answer_ordering,
+        "qadiscourse_input": preprocessor.extract_qadiscourse_inputs,
+        "qadiscourse_output": preprocessor.extract_qadiscourse_targets,
     }
-
+    
     preprocess_function = lambda x: preprocess_function__questions_answers(x, preprocess_function_map[model_args.preprocess_input_func], preprocess_function_map[model_args.preprocess_output_func])
 
     _clean_mem()

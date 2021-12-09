@@ -1,8 +1,9 @@
 # To add a new cell, type '# %%'
 # To add a new markdown cell, type '# %% [markdown]'
 # %%
-from typing import Literal
+from typing import Literal, Any, Dict, List
 from IPython import get_ipython
+from traitlets.traitlets import default
 import wandb
 
 # Imports
@@ -21,11 +22,8 @@ from utils import setup_wandb
 now = lambda: datetime.datetime.now().strftime("%Y-%m-%d--%H:%M:%S")
 system = get_ipython().system if get_ipython() else os.system
 
-run = None  # wandb run
 # tmp_dir = os.environ.get("TMPDIR", "/tmp")
 tmp_dir = os.environ.get("HOME") + "/tmp"
-
-# Params
 
 ### Data params
 
@@ -42,44 +40,44 @@ qanom_params = ['--dataset_name', 'biu-nlp/qanom']
 joint_qasrl_params = ['--dataset_name', '{train: biu-nlp/qanom, kleinay/qa_srl2018; validation: biu-nlp/qa_srl2020; test: biu-nlp/qa_srl2020}']  
 joint_qanom_params = ['--dataset_name', '{train: biu-nlp/qanom, kleinay/qa_srl2018; validation: biu-nlp/qanom; test: biu-nlp/qanom}']  
 
+qadiscourse_params = ['--dataset_name', 'biu-nlp/qa_discourse']
+
 ### Model params
 
-model_dir_dict = {"t5": f'{tmp_dir}/t5-tst-summarization',
-                  "t5_large": f'{tmp_dir}/t5_large-tst-summarization',
-                  "bart": f'{tmp_dir}/bart-tst-summarization'}
-predict_params_per_type = lambda model_type: ['--model_name_or_path', model_dir_dict[model_type]]
+def get_model_dir(model_type: str, train_task: str = None, directory_switch: str = None) -> str:
+    model_dir = f"{tmp_dir}/{model_type}-tst-summarization"
+    if train_task:
+        model_dir += f"/{train_task}" 
+    if directory_switch:
+        model_dir += f"/{directory_switch}"
+    return model_dir 
 
-t5_model_dir = model_dir_dict["t5"]
-os.environ["T5_MODEL_DIR"] = t5_model_dir
-t5_small_model_train_params = [
-    '--model_name_or_path', 't5-small'
-]
-t5_extra_params = [
-    '--model_type', 't5',
-    '--source_prefix', 'summarize: ',
-    '--output_dir', model_dir_dict["t5"]
-]
+def set_model_params(model_type: str, model_dir: str = None, load_pretrained = True, source_prefix = 'summarize: ', **kwargs) -> List[str]:
+    """
+    source_prefix string is an actual generic prompt; for more controlled prompt behaiour, specify behaviour name enclosed by <>,
+    For example, source_prefix="<predicate-type>" makes the prompt dependent on predicate type.
+    These should be processed differently by the `preprocess_function__questions_answers` function in `run_summarization.py`.
+    """
+    sys.argv += ['--output_dir', model_dir]
+    
+    if model_type in ("t5", "t5-large"):
+        model_name_to_load = "t5-small" if model_type=="t5" else model_type
+        sys.argv += ['--model_name_or_path', model_name_to_load if load_pretrained else model_dir,
+                     '--model_type', 't5',
+                     '--source_prefix', source_prefix,
+                     ]
 
-t5_large_model_train_params = [
-    '--model_name_or_path', 't5-large'
-]
-t5_large_extra_params = [
-    '--model_type', 't5',
-    '--source_prefix', 'summarize: ',
-    '--output_dir', model_dir_dict["t5_large"]
-]
-
-bart_model_dir = model_dir_dict["bart"]
-os.environ["BART_MODEL_DIR"] = bart_model_dir
-bart_base_model_train_params = [
-    '--model_name_or_path', 'facebook/bart-base'
-]
-bart_extra_params = [
-    '--model_type', 'bart',
-    '--output_dir', model_dir_dict["bart"]
-]
-
-
+        os.environ["T5_MODEL_DIR"] = model_dir      
+    
+    elif model_type in ("bart", "bart-large"):
+        model_name_to_load = 'facebook/' + ('bart-base' if model_type=="bart" else model_type)
+        sys.argv += ['--model_name_or_path', model_name_to_load if load_pretrained else model_dir,
+                     '--model_type', 'bart',
+                     ]
+        os.environ["BART_MODEL_DIR"] = model_dir      
+    else:
+        raise ValueError(f"model_type doesn't exist ; model_type {model_type}")
+    
 # # Train, predict and evaluate ***********************
 
 # %%
@@ -100,28 +98,44 @@ bart_extra_params = [
 
 # train_epochs = 3
 
+def get_default_kwargs() -> Dict[str, Any]:
+    default_boolean_args = dict(overwrite_output_dir=True,
+                                predict_with_generate=True,
+                                debug_mode=False,)
+    default_non_boolean_args = dict(per_device_train_batch_size=12,
+                                    per_device_eval_batch_size=12,
+                                    logging_steps=200)  
+    defaults = dict(default_boolean_args, **default_non_boolean_args)
+    return defaults
+  
+
+def linearize_kwargs_to_send_model(kwargs) -> List[str]:
+    kwargs_to_send = []
+    for key, value in kwargs.items():
+        if type(value) == bool:
+            if value is True:
+                kwargs_to_send.extend([f'--{key}'])
+        else:
+            if value is not None:
+                kwargs_to_send.extend([f'--{key}', f'{value}'])
+    return kwargs_to_send
 
 # %%
 # ### (1) Train ********************************
 def train(model_type, 
           qasrl_train_dataset, 
           train_epochs,
+          model_dir,
           wandb_run_name=None, # a way to name experiment in wandb 
           limit_train_data=None,
           limit_eval_data=None,
           **kwargs):
-    default_boolean_args = dict(do_eval=True,
-                                overwrite_cache=True,
-                                overwrite_output_dir=True,
-                                predict_with_generate=True,
-                                debug_mode=False,)
+
     wandb_run_name = wandb_run_name or f"{now()}_{model_type}_train-on-{qasrl_train_dataset}_{train_epochs}-ep"
     sys.argv = [
         'run_summarization.py',
         '--do_train',
-        '--per_device_train_batch_size', '12',
-        '--per_device_eval_batch_size', '12',
-        '--logging_steps', '200',
+        '--do_eval',
         '--num_train_epochs', f'{train_epochs}',
         '--report_to', 'wandb',
         '--wandb_run_name', wandb_run_name,
@@ -129,33 +143,24 @@ def train(model_type,
         # '--n_gpu', '[5,6]'
     ]
     
-    kwargs = dict(default_boolean_args, **kwargs)   # integrate deafult (bool) values and override them by **kwargs
+    if "limit_train_data" in kwargs and "overwrite_cache" not in kwargs:
+        kwargs["overwrite_cache"] = True
+        
+        
+    defaults = get_default_kwargs()
+    kwargs = dict(defaults, **kwargs)   # integrate deafult kwargs values and override them by **kwargs
     
-    kwargs_to_send = []
-    for key, value in kwargs.items():
-        if type(value) == bool:
-            if value is True:
-                kwargs_to_send.extend([f'--{key}'])
-        else:
-            kwargs_to_send.extend([f'--{key}', f'{value}'])
+    kwargs_to_send = linearize_kwargs_to_send_model(kwargs)
     sys.argv += kwargs_to_send
+    
+    os.makedirs(model_dir, exist_ok=True)
+    load_pretrained_model: bool = kwargs["overwrite_output_dir"]
+    set_model_params(model_type, model_dir, load_pretrained=load_pretrained_model, **kwargs)
     
     if limit_train_data:
         sys.argv += ['--limit_train_data', f'{limit_train_data}']
     if limit_eval_data:
         sys.argv += ['--limit_eval_data', f'{limit_eval_data}']
-
-    if model_type == "t5":
-        sys.argv.extend(t5_small_model_train_params)
-        sys.argv.extend(t5_extra_params)
-    elif model_type == "t5_large":
-        sys.argv.extend(t5_large_model_train_params)
-        sys.argv.extend(t5_large_extra_params)        
-    elif model_type == "bart":
-        sys.argv.extend(bart_base_model_train_params)
-        sys.argv.extend(bart_extra_params)
-    else:
-        raise ValueError(f"model_type doesn't exist ; model_type {model_type}")
 
     if qasrl_train_dataset == "2015":
         sys.argv.extend(qasrl_2015_params)
@@ -167,12 +172,13 @@ def train(model_type,
         sys.argv.extend(joint_qasrl_params)
     elif qasrl_train_dataset == "joint_qanom":
         sys.argv.extend(joint_qanom_params)
+    elif qasrl_train_dataset == "qadiscourse":
+        sys.argv.extend(qadiscourse_params)
     else:
         raise ValueError(f"qasrl_train_dataset doesn't exist ; qasrl_train_dataset {qasrl_train_dataset}")
 
     _, run = main()
 
-    model_dir = model_dir_dict[model_type]
     # setup_wandb(True, run.name)
     wandb.save(f"{model_dir}/pytorch_model.bin")
 
@@ -184,7 +190,7 @@ def train(model_type,
 # ### (2) Predict ***************************
 
 # !python run_summarization.py --model_name_or_path $TMPDIR/tst-summarization --do_predict --dataset_name qa_srl --output_dir $TMPDIR/tst-summarization --source_prefix "summarize: " --predict_with_generate
-def predict(model_type, qasrl_test_dataset, run=None):
+def predict(model_type, qasrl_test_dataset, model_dir, run=None, **kwargs):
     sys.argv = [
         'run_summarization.py',
         '--do_predict',
@@ -193,26 +199,31 @@ def predict(model_type, qasrl_test_dataset, run=None):
         '--report_to', 'wandb',
         '--wandb_run_name', run.name if run else None
     ]
-
-    if model_type == "t5":
-        sys.argv.extend(t5_extra_params)
-    elif model_type == "t5_large":
-        sys.argv.extend(t5_large_extra_params)
-    elif model_type == "bart":
-        sys.argv.extend(bart_extra_params)
-    else:
-        raise ValueError(f"model_type doesn't exist ; model_type {model_type}")  
+    
+    if "limit_eval_data" in kwargs and "overwrite_cache" not in kwargs:
+        kwargs["overwrite_cache"] = True
+    if qasrl_test_dataset == "qadiscourse":
+        kwargs["preprocess_input_func"] = "qadiscourse_input"
+        kwargs["preprocess_output_func"] = "qadiscourse_output"
+        
+        
+    defaults = get_default_kwargs()
+    kwargs = dict(defaults, **kwargs)   # integrate deafult kwargs values and override them by **kwargs
+    
+    kwargs_to_send = linearize_kwargs_to_send_model(kwargs)
+    sys.argv.extend(kwargs_to_send)
+        
     # add model name for prediction
-    sys.argv.extend(predict_params_per_type(model_type))  
+    set_model_params(model_type, model_dir, load_pretrained=False, **kwargs)  # always load the local model from training
 
     if qasrl_test_dataset == "2015":
         sys.argv.extend(qasrl_2015_params)
     elif qasrl_test_dataset == "2020":
         sys.argv.extend(qasrl_2020_params)
-        test_sentences_path = "/sentences_data/wikinews.test.full.csv"
     elif qasrl_test_dataset == "qanom":
         sys.argv.extend(qanom_params)
-        test_sentences_path = "/data/generated_predictions.csv" # generated predictions will also hold a "tokens" columns and could serve as sentences-file   
+    elif qasrl_test_dataset == "qadiscourse":
+        sys.argv.extend(qadiscourse_params)
     else:
         raise ValueError(f"qasrl_test_dataset doesn't exist ; qasrl_test_dataset {qasrl_test_dataset}")
 
@@ -226,6 +237,7 @@ def predict(model_type, qasrl_test_dataset, run=None):
 # ### (3) Run state machine using docker, for parsing the predicted questions into 7 slot format
 
 def decode_into_qasrl(model_dir, test_dataset):
+    "Call qasrl_state_machine_example within docker container to verify question formats match QASRL slots. "
     os.environ["MODEL_DIR"] = model_dir 
     if test_dataset != "qanom":
         shell_command = 'docker run -it -v "${MODEL_DIR}:/data" -v "$(pwd)/../qasrl_bart/qasrl_gs/data/sentences/:/sentences_data" --rm --name qasrl-automaton hirscheran/qasrl_state_machine_example "file" "/data/generated_predictions.csv" "/data/output_file.csv"'
@@ -245,12 +257,16 @@ def decode_into_qasrl(model_dir, test_dataset):
 
 # %% 
 # ### (4) Evaluate
-def evaluate(model_dir, qasrl_test_dataset, wandb_run=None):
-    wandb_run_name = wandb_run.name if wandb_run else None
-    if qasrl_test_dataset != "qanom":
+def evaluate(model_dir, qasrl_test_dataset, wandb_run_name=None):
+    if qasrl_test_dataset == "2020":
         evals = evaluate_qasrl(model_dir, "qasrl_gs/data/gold/all.test.combined.csv", f"{model_dir}/output_file.csv", None, wandb_run_name)
-    else:
+    elif qasrl_test_dataset == "qanom":
         evals = evaluate_qanom(model_dir, wandb_run_name)
+    elif qasrl_test_dataset == "qadiscourse":
+        # TODO implement evaluation module for qadiscourse
+        raise NotImplementedError()
+    else:
+        raise NotImplementedError(f"evaluate function not implemented for '{qasrl_test_dataset}' test dataset")
     print_evaluations(*evals)
     
     return evals
@@ -265,16 +281,17 @@ def print_invalid_dist(model_type):
     print(df["Error-type"].value_counts(), "\n")
     print(df["Error-type"].value_counts() / len(df))
 
-def full_experiment(model_type: Literal["bart", "t5"] = "bart", 
-                    train_dataset: Literal["qanom", "qasrl"] = "qanom", 
-                    test_dataset: Literal["qanom", "qasrl"] = "qanom",
+def full_experiment(model_type: Literal["bart", "t5", "t5-large"] = "bart", 
+                    train_dataset: Literal["qanom", "qasrl", "qadiscourse"] = "qanom", 
+                    test_dataset: Literal["qanom", "qasrl", "qadiscourse"] = "qanom",
+                    dir_switch: str = None,
                     train_epochs: int = 10,
                     description: str = "",
                     finish_wandb = True,
                     fp16 = True,
                     **kwargs):
     
-    model_dir = model_dir_dict[model_type]
+    model_dir = get_model_dir(model_type, train_dataset, dir_switch)
     experiment_kwargs = dict(description=description,
                              model_type=model_type, 
                              train_dataset=train_dataset,
@@ -283,18 +300,18 @@ def full_experiment(model_type: Literal["bart", "t5"] = "bart",
                              fp16=fp16,
                              **kwargs)
     
-    qasrl_train_dataset = "qanom" if train_dataset == "qanom" else "2018"
-    qasrl_test_dataset = "qanom" if test_dataset == "qanom" else "2020"
+    qasrl_train_dataset = "2018" if train_dataset == "qasrl" else train_dataset
+    qasrl_test_dataset = "2020" if test_dataset == "qasrl" else test_dataset
 
-    run = train(model_type, qasrl_train_dataset, train_epochs, **kwargs)
+    run = train(model_type, qasrl_train_dataset, train_epochs, model_dir, **kwargs)
     wandb.config.update(experiment_kwargs, allow_val_change=True)
     # save configuration of experiment
     with open(f"{model_dir}/experiment_kwargs.json", "w") as fout:
         json.dump(experiment_kwargs, fout)
     wandb.save(f"{model_dir}/experiment_kwargs.json")
-    run = predict(model_type, qasrl_test_dataset, run)
+    run = predict(model_type, qasrl_test_dataset, model_dir=model_dir, run=run, **kwargs)
     decode_into_qasrl(model_dir, qasrl_test_dataset)
-    unlabelled_arg, labelled_arg, unlabelled_role = evaluate(model_dir, qasrl_test_dataset, wandb_run=run)
+    unlabelled_arg, labelled_arg, unlabelled_role = evaluate(model_dir, qasrl_test_dataset, wandb_run_name=run.name)
     
     wandb.save(f"{model_dir}/*.csv")
     wandb.save(f"{model_dir}/*.json")
@@ -330,7 +347,7 @@ if __name__ == "__main__":
     # model_type = "bart"
     model_type = "t5"
 
-    model_dir = model_dir_dict[model_type]
+    model_dir = get_model_dir(model_type)
 
     # qasrl_train_dataset = "2015"
     # qasrl_train_dataset = "2018"
@@ -343,10 +360,10 @@ if __name__ == "__main__":
 
     train_epochs = 30
     
-    run = train(model_type, qasrl_train_dataset, train_epochs, 
+    run = train(model_type, qasrl_train_dataset, train_epochs, model_dir,
                 overwrite_output_dir=True, 
                 wandb_run_name=f"{now()}_{model_dir}_{qasrl_train_dataset}",
                 preprocess_input_func="input_predicate_marker")
-    predict(model_type, qasrl_test_dataset, run)
+    predict(model_type, qasrl_test_dataset, model_dir, run)
     decode_into_qasrl(model_dir, qasrl_test_dataset)
     unlabelled_arg, labelled_arg, unlabelled_role = evaluate(model_dir, qasrl_test_dataset, wandb_run=run)

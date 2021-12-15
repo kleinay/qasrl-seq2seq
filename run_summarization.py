@@ -22,7 +22,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Tuple
+from typing import Literal, Optional, List, Dict, Tuple
 from datasets.arrow_dataset import Dataset
 from datasets.dataset_dict import DatasetDict
 
@@ -95,12 +95,6 @@ class ModelArguments:
     wandb_run_name: str = field(
         default=None
     )
-    preprocess_input_func: str = field(
-        default='input'
-    )
-    preprocess_output_func: str = field(
-        default='all'
-    )
     config_name: Optional[str] = field(
         default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
     )
@@ -126,6 +120,19 @@ class ModelArguments:
                     "with private models)."
         },
     )
+    top_k: Optional[int] = field(
+        default=None,
+        metadata={"help": "Decoding with top_k tokens."},
+    )
+    top_p: Optional[float] = field(
+        default=None,
+        metadata={"help": "Decoding using the top_p algorithm (0 < p <= 1)."},
+    )
+    num_beam_groups: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of groups to divide `num_beams` into in order to ensure diversity among different groups of beams."},
+    )
+    
 
 
 @dataclass
@@ -242,9 +249,30 @@ class DataTrainingArguments:
             "help": "Whether to ignore the tokens corresponding to padded labels in the loss computation or not."
         },
     )
+    preprocess_input_func: str = field(
+        default='input_predicate_marker'
+    )
+    preprocess_output_func: str = field(
+        default='all_by_answer_ordering'
+    )
     source_prefix: Optional[str] = field(
         default=None, metadata={"help": "A prefix to add before every source text (useful for T5 models)."}
     )
+    append_verb_form: bool = field(
+        default=True, metadata={"help": "Whether to append the verb_form feature (if exists) to the end of the input sequence."}
+    ) 
+    predicate_marker_type: str = field(
+        # Literal["generic", "pred_type"]
+        default="generic", 
+        metadata={"help": "The method by which predicate marker is marking the predicate. Only in use when `preprocess_input_func`=input_predicate_marker"}
+    )
+    use_bilateral_predicate_marker: bool = field(
+        default=False, metadata={"help": "Whether to demarcate the predicate from both sides or just before it. Only in use when `preprocess_input_func`=input_predicate_marker"}
+    )
+    learn_predicate_type: Optional[str] = field(
+        # Literal["pre", "post"]
+        default=None, metadata={"help": "Whether and how incorporate `predicate_type` info into the output sequence, as an MTL objective to enhance joint learning."}
+    ) 
 
     def __post_init__(self):
         if self.dataset_name is None and self.train_file is None and self.validation_file is None:
@@ -383,7 +411,7 @@ def main(generate_sentence_column_in_prediction=False):
             predicate_type = "verbal" 
         elif "qanom" in dataset_name: 
             predicate_type = "nominal"
-        elif "qadiscourse" in dataset_name:
+        elif "discourse" in dataset_name:
             predicate_type = "discourse"
         else:
             raise ValueError(f"dataset {dataset_name.strip()} is not supported shen setting predicate_type feature")
@@ -499,13 +527,23 @@ def main(generate_sentence_column_in_prediction=False):
         additional_special_tokens=all_special_tokens
     )
     tokenizer.add_tokens(unnormalized_tokens)
+
+    optional_params_to_pass_to_model_config = ("top_k", "top_p", "num_beam_groups")
+    # optionally: specify here decoding method params, e.g. "top_k", "top_p", 
+    # comment: "num_beams" from DataTrainingArguments is already handled 
+    kwargs_for_model_config = {key: value
+                        for key, value in model_args.__dict__.items() 
+                        if key in optional_params_to_pass_to_model_config 
+                           and value is not None} 
+    config.update(kwargs_for_model_config)       
+    
     model = AutoModelForSeq2SeqLM.from_pretrained(
         model_args.model_name_or_path,
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
         config=config,
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
-        use_auth_token=True if model_args.use_auth_token else None
+        use_auth_token=True if model_args.use_auth_token else None,
     )
 
     model.resize_token_embeddings(len(tokenizer))
@@ -561,7 +599,8 @@ def main(generate_sentence_column_in_prediction=False):
             f"`{model.__class__.__name__}`. This will lead to loss being calculated twice and will take up more memory"
         )
 
-    preprocessor = Preprocessor(SEPARATOR_INPUT_QUESTION_PREDICATE,
+    preprocessor = Preprocessor(data_args,
+                SEPARATOR_INPUT_QUESTION_PREDICATE,
                  SEPARATOR_OUTPUT_ANSWERS,
                  SEPARATOR_OUTPUT_QUESTIONS,
                  SEPARATOR_OUTPUT_QUESTION_ANSWER,
@@ -570,8 +609,6 @@ def main(generate_sentence_column_in_prediction=False):
                  PREDICATE_VERB_MARKER,
                  PREDICATE_NOMINALIZATION_MARKER,
                  tokenizer.eos_token)
-
-    prefix_preprocessing_func = lambda x: preprocessor.get_sequence_prefix(x, data_args.source_prefix)
 
     def preprocess_function__questions_answers(examples, extract_inputs_func, extract_outputs_func):
         inputs = examples[text_column]
@@ -600,8 +637,11 @@ def main(generate_sentence_column_in_prediction=False):
             is_verbals = examples["is_verbal"]
         else:
             is_verbals = [True] * batch_size    
+        if 'predicate_type' in examples:    # only at joint training  
+            pred_types = examples["predicate_type"]
+        else:
+            pred_types = [None] * batch_size    
             
-        pred_types = examples["predicate_type"]        
         # in 2015 dataset there is no ids so just initialize empty, and in 2020 it is qasrl_id
         sent_id_keys = list({"sent_id", "qasrl_id"}.intersection(examples))
         qasrl_ids = examples[sent_id_keys[0]] if sent_id_keys else ["" for x in examples[predicate_index_key]]
@@ -623,7 +663,7 @@ def main(generate_sentence_column_in_prediction=False):
         targets = grouped_df.apply(extract_outputs_func).tolist()
 
         # integrate prefix into input sequences
-        prefixes = grouped_df.apply(prefix_preprocessing_func).tolist()
+        prefixes = grouped_df.apply(preprocessor.get_sequence_prefix).tolist()
         inputs = [prefix + inp for inp, prefix in zip(inputs, prefixes)]
         
         model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
@@ -646,18 +686,10 @@ def main(generate_sentence_column_in_prediction=False):
         model_inputs["sentence"] = grouped_df.apply(lambda x: x.iloc[0])['input'].tolist()
         model_inputs["qasrl_id"] = grouped_df.apply(lambda x: x.iloc[0])['qasrl_id'].tolist()
         return model_inputs
-
-    preprocess_function_map = {
-        "input": preprocessor.extract_inputs,
-        "input_predicate_marker": preprocessor.extract_inputs_predicate_inline_marker,
-        "first_two_question_answer": preprocessor.extract_targets_only_first_two_question_answers,
-        "all": preprocessor.extract_targets_all,
-        "all_by_answer_ordering": preprocessor.extract_targets_all_by_answer_ordering,
-        "qadiscourse_input": preprocessor.extract_qadiscourse_inputs,
-        "qadiscourse_output": preprocessor.extract_qadiscourse_targets,
-    }
     
-    preprocess_function = lambda x: preprocess_function__questions_answers(x, preprocess_function_map[model_args.preprocess_input_func], preprocess_function_map[model_args.preprocess_output_func])
+    # preprocess_function = lambda x: preprocess_function__questions_answers(x, preprocess_input_function_map[data_args.preprocess_input_func], 
+    #                                                                        preprocess_output_function_map[data_args.preprocess_output_func])
+    preprocess_function = lambda x: preprocess_function__questions_answers(x, preprocessor.preprocess_input, preprocessor.preprocess_output)
 
     _clean_mem()
     if training_args.do_train:
@@ -875,10 +907,12 @@ def main(generate_sentence_column_in_prediction=False):
                 # Log example instance 
                 i = 0
                 logger.info(f"\n\n**      Example (idx: {i}):      **")
-                logger.info(f"* Input Seq:\t\t {tokenizer.decode(predict_dataset[i]['input_ids'])}")
-                logger.info(f"* Gold Output:\t\t {tokenizer.decode(predict_dataset[i]['labels'])}")
+                logger.info(f"* Input Seq:\t\t {tokenizer.decode(predict_dataset[i]['input_ids']).rstrip('<pad>')}")
+                logger.info(f"* Gold Output:\t\t {tokenizer.decode(predict_dataset[i]['labels']).rstrip('<pad>')}")
                 logger.info(f"* Predicted Output:\t {predictions[i].rstrip('<pad>')}")
                 
+                #TODO remove non-QASRL segments of the output sequences 
+                #  e.g. depends on data_args.learn_predicate_type
 
                 predicted_QAs: List[QuestionAnswer]; invalid_pred_seqs: List[str] 
                 predicted_QAs, invalid_pred_seqs = strings_to_objects_parser.to_qasrl_gs_csv_format(predict_dataset, predictions)

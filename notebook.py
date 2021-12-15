@@ -9,14 +9,15 @@ import wandb
 # Imports
 
 from run_summarization import main
-from run_evaluation import evaluate_qasrl, evaluate_qanom, print_evaluations
+from run_evaluation import evaluate_qasrl, evaluate_qanom, evaluate_qadiscourse, print_evaluations
 import os
 import sys
 import json
 import datetime
 import subprocess
 from itertools import product
-from utils import setup_wandb
+import pandas as pd
+import utils 
 
 # General variables
 now = lambda: datetime.datetime.now().strftime("%Y-%m-%d--%H:%M:%S")
@@ -102,8 +103,8 @@ def get_default_kwargs() -> Dict[str, Any]:
     default_boolean_args = dict(overwrite_output_dir=True,
                                 predict_with_generate=True,
                                 debug_mode=False,)
-    default_non_boolean_args = dict(per_device_train_batch_size=12,
-                                    per_device_eval_batch_size=12,
+    default_non_boolean_args = dict(per_device_train_batch_size=8,
+                                    per_device_eval_batch_size=8,
                                     logging_steps=200)  
     defaults = dict(default_boolean_args, **default_non_boolean_args)
     return defaults
@@ -145,7 +146,11 @@ def train(model_type,
     
     if "limit_train_data" in kwargs and "overwrite_cache" not in kwargs:
         kwargs["overwrite_cache"] = True
-        
+    
+    if "batch_size" in kwargs and kwargs["batch_size"] is not None:
+        kwargs["per_device_train_batch_size"] = kwargs["batch_size"]
+        kwargs["per_device_eval_batch_size"] = kwargs["batch_size"]
+        kwargs.pop("batch_size")
         
     defaults = get_default_kwargs()
     kwargs = dict(defaults, **kwargs)   # integrate deafult kwargs values and override them by **kwargs
@@ -206,6 +211,10 @@ def predict(model_type, qasrl_test_dataset, model_dir, run=None, **kwargs):
         kwargs["preprocess_input_func"] = "qadiscourse_input"
         kwargs["preprocess_output_func"] = "qadiscourse_output"
         
+    if "batch_size" in kwargs and kwargs["batch_size"] is not None:
+        kwargs["per_device_train_batch_size"] = kwargs["batch_size"]
+        kwargs["per_device_eval_batch_size"] = kwargs["batch_size"]
+        kwargs.pop("batch_size")    
         
     defaults = get_default_kwargs()
     kwargs = dict(defaults, **kwargs)   # integrate deafult kwargs values and override them by **kwargs
@@ -238,11 +247,13 @@ def predict(model_type, qasrl_test_dataset, model_dir, run=None, **kwargs):
 
 def decode_into_qasrl(model_dir, test_dataset):
     "Call qasrl_state_machine_example within docker container to verify question formats match QASRL slots. "
+    if wandb.run is None:
+        utils.setup_wandb(True, f"decoding {'/'.join(model_dir.split('/')[-3:])}")
     os.environ["MODEL_DIR"] = model_dir 
     if test_dataset != "qanom":
-        shell_command = 'docker run -it -v "${MODEL_DIR}:/data" -v "$(pwd)/../qasrl_bart/qasrl_gs/data/sentences/:/sentences_data" --rm --name qasrl-automaton hirscheran/qasrl_state_machine_example "file" "/data/generated_predictions.csv" "/data/output_file.csv"'
+        shell_command = f'docker run -it -v "{model_dir}:/data" -v "$(pwd)/../qasrl_bart/qasrl_gs/data/sentences/:/sentences_data" --rm --name qasrl-automaton hirscheran/qasrl_state_machine_example "file" "/data/generated_predictions.csv" "/data/state_machine_output.csv"'
     else:
-        shell_command = 'docker run -it -v "${MODEL_DIR}:/data" --rm --name qasrl-automaton hirscheran/qasrl_state_machine_example "file" "/data/generated_predictions.csv" "/data/output_file.csv"'
+        shell_command = f'docker run -it -v "{model_dir}:/data" --rm --name qasrl-automaton hirscheran/qasrl_state_machine_example "file" "/data/generated_predictions.csv" "/data/state_machine_output.csv"'
     # execute; redirect output
     with open(f"{model_dir}/qasrl_state_machine_output.txt", "w") as fout:
         completed_process = subprocess.run(shell_command, shell=True, capture_output=True, text=True) #stdout=subprocess.PIPE,
@@ -250,21 +261,35 @@ def decode_into_qasrl(model_dir, test_dataset):
             fout.write(completed_process.stdout)
         if completed_process.stderr:
             print("~!!!~   Standard Error from running docker:   ~!!!~ \n", completed_process.stderr)
-        completed_process.check_returncode()  # Raise exception if subprocess ended with error
+            fout.write("~!!!~   Standard Error from running docker:   ~!!!~ \n" + completed_process.stderr)
+    wandb.save(f"{model_dir}/qasrl_state_machine_output.txt")
+    if completed_process.returncode != 0: # Raise exception if subprocess ended with error
+        print(f"Docker process failed (returncode=={completed_process.returncode}). \n"
+              f"Standard Error: \n{completed_process.stderr}\n\n" 
+              f"Run the command on console to see details: \n\n{shell_command}\n\n"
+              f"Alternatively, run this function from a python notebook: decode_into_qasrl('{model_dir}','{test_dataset}')")
     
-
-# decode_into_qasrl(model_dir, qasrl_test_dataset)
+    # copy state_machine_output file to have a non-root priviliges file (docker is run by root)
+    from shutil import copyfile
+    copyfile(f"{model_dir}/state_machine_output.csv", f"{model_dir}/decoded_output.csv")
+        
+    # re-format qanom output according to qanom format 
+    state_machine_output_fn = f"{model_dir}/decoded_output.csv" 
+    if test_dataset == "qanom":
+        from qanom.annotations.common import read_annot_csv, save_annot_csv
+        df_parsed_outputs = read_annot_csv(state_machine_output_fn)
+        df_parsed_outputs = utils.reshape_qasrl_into_qanom(df_parsed_outputs, sentences_df=pd.read_csv(f"{model_dir}/generated_predictions.csv"))
+        save_annot_csv(annot_df=df_parsed_outputs, file_path=state_machine_output_fn)
 
 # %% 
 # ### (4) Evaluate
 def evaluate(model_dir, qasrl_test_dataset, wandb_run_name=None):
     if qasrl_test_dataset == "2020":
-        evals = evaluate_qasrl(model_dir, "qasrl_gs/data/gold/all.test.combined.csv", f"{model_dir}/output_file.csv", None, wandb_run_name)
+        evals = evaluate_qasrl(model_dir, "qasrl_gs/data/gold/all.test.combined.csv", f"{model_dir}/decoded_output.csv", None, wandb_run_name)
     elif qasrl_test_dataset == "qanom":
         evals = evaluate_qanom(model_dir, wandb_run_name)
     elif qasrl_test_dataset == "qadiscourse":
-        # TODO implement evaluation module for qadiscourse
-        raise NotImplementedError()
+        evals = evaluate_qadiscourse(model_dir, wandb_run_name) # throws NotImplementedError
     else:
         raise NotImplementedError(f"evaluate function not implemented for '{qasrl_test_dataset}' test dataset")
     print_evaluations(*evals)

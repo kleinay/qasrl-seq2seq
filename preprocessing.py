@@ -16,6 +16,7 @@ import pandas as pd
 
 class Preprocessor:
     def __init__(self,
+                 data_args,
                  separator_input_question_predicate: str,
                  separator_output_answers: str,
                  separator_output_questions: str,
@@ -26,6 +27,7 @@ class Preprocessor:
                  marker_nominalization_predicate: str,
                  eos_token: str
                  ):
+        self.data_args = data_args
         self.separator_input_question_predicate = separator_input_question_predicate
         self.separator_output_answers = separator_output_answers
         self.separator_output_questions = separator_output_questions
@@ -35,17 +37,55 @@ class Preprocessor:
         self.marker_verbal_predicate = marker_verbal_predicate
         self.marker_nominalization_predicate = marker_nominalization_predicate
         self.eos_token = eos_token
-
+        
+        self.preprocess_input_function_map = {
+            "input_predicate_repeated": self.extract_inputs_predicate_repeated,
+            "input_predicate_marker": self.extract_inputs_predicate_inline_marker,
+            "qadiscourse_input": self.extract_qadiscourse_inputs,
+        }
+        self.preprocess_output_function_map = {
+            "first_two_question_answer": self.extract_targets_only_first_two_question_answers,
+            "all_random_order": self.extract_targets_all,
+            "all_by_answer_ordering": self.extract_targets_all_by_answer_ordering,
+            # "all_permutations": preprocessor.extract_targets_with_all_permutations,
+            "qadiscourse_output": self.extract_qadiscourse_targets,
+            }
+    
+    """
+    External API:
+    """
+    def preprocess_input(self, x: pd.DataFrame) -> str:
+        if self.data_args.preprocess_input_func not in self.preprocess_input_function_map:
+            raise ValueError(f"input preprocessing function {self.data_args.preprocess_input_func} not supported; "
+                             f"options are: {list(self.preprocess_input_function_map.keys())}")
+        preprocessing_function = self.preprocess_input_function_map[self.data_args.preprocess_input_func]
+        input_seq = preprocessing_function(x)
+        return input_seq
+    
+    def preprocess_output(self, x: pd.DataFrame) -> str:
+        row = x.iloc[0]
+        if self.data_args.preprocess_output_func not in self.preprocess_output_function_map:
+            raise ValueError(f"output preprocessing function {self.data_args.preprocess_output_func} not supported; "
+                             f"options are: {list(self.preprocess_output_function_map.keys())}")
+        preprocessing_function = self.preprocess_output_function_map[self.data_args.preprocess_output_func]
+        target_seq = preprocessing_function(x)
+        
+        if self.data_args.learn_predicate_type == "pre" and "predicate_type" in row:
+            target_seq = row["predicate_type"] + " | " + target_seq 
+        elif self.data_args.learn_predicate_type == "post" and "predicate_type" in row:
+            target_seq = target_seq + " | " + row["predicate_type"] 
+        return target_seq
+    
     """
     Prefix for Sequence preprocessing:
     """
-    def get_sequence_prefix(self, x: pd.DataFrame, prefix_or_prefixing_method: str) -> str:
+    def get_sequence_prefix(self, x: pd.DataFrame) -> str:
         row = x.iloc[0]
-        if prefix_or_prefixing_method is None:
+        if self.data_args.source_prefix is None:
             return ''
-        if not prefix_or_prefixing_method.startswith("<"):  # Regular prefix - not dependent on input row x
-            return prefix_or_prefixing_method
-        if prefix_or_prefixing_method == "<predicate-type>":
+        if not self.data_args.source_prefix.startswith("<"):  # Regular prefix - not dependent on input row x
+            return self.data_args.source_prefix
+        if self.data_args.source_prefix == "<predicate-type>":
             if "predicate_type" not in row:
                 raise ValueError("source_prefix is '<predicate-type>' but input row has no 'predicate_type' attribute.")
             else:
@@ -53,13 +93,13 @@ class Preprocessor:
                 return f"Generate QAs for {pred_type} QASRL: "
         
         
-        raise ValueError(f"source_prefix '{prefix_or_prefixing_method}' starts with '<' but does not correspond to a valid prefixing method. ")
+        raise ValueError(f"source_prefix '{self.data_args.source_prefix}' starts with '<' but does not correspond to a valid prefixing method. ")
 
     """
     Input Sequence preprocessing:
     """
     
-    def extract_inputs(self, x: pd.DataFrame) -> str:
+    def extract_inputs_predicate_repeated(self, x: pd.DataFrame) -> str:
         """ Encode predicate by repeating it at the end of sequence """
         # all rows have the same index values (and predicate-tailored info) because of the groupby
         row = x.iloc[0]
@@ -69,8 +109,8 @@ class Preprocessor:
         seq = self._append_verb_form(seq, row)
         
         # append predicate_type
-        # if "predicate_type" in row:   # only if we train on joint-qasrl/joint-qanom datatset
-        #     seq = f'{row["predicate_type"]} | {seq}' 
+        if "predicate_type" in row:   # only if we train on joint-qasrl/joint-qanom datatset
+            seq = f'{row["predicate_type"]} | {seq}' 
         return seq
     
     def extract_inputs_predicate_inline_marker(self, x: pd.DataFrame) -> str:
@@ -80,22 +120,30 @@ class Preprocessor:
         sentence_before_predicate, predicate, sentence_after_predicate = self._get_splitted_sentence_by_predicate(row)
         
         # prepare predicate marker
-        """ In case we want a generic marker for all predicate types: """
-        predicate_marker = self.marker_generic_predicate    
-        """ In case we want special marker for each predicate type: """
-        if "predicate_type" in row:
+        #  In case we want a generic marker for all predicate types: """
+        if self.data_args.predicate_marker_type == "generic":
+            predicate_marker = self.marker_generic_predicate    
+        #  In case we want special marker for each predicate type: """
+        elif self.data_args.predicate_marker_type == "pred_type" \
+            and "predicate_type" in row:
             predicate_marker = {"verbal": self.marker_verbal_predicate, 
                                 "nominal": self.marker_nominalization_predicate
                                 }[row["predicate_type"]]
-        seq = f"{sentence_before_predicate} {predicate_marker} {predicate} {sentence_after_predicate}"
+        else:
+            raise ValueError(f"invalid value for `data_args.predicate_marker_type`: {self.data_args.predicate_marker_type}")
+
+        if self.data_args.use_bilateral_predicate_marker:
+            seq = f"{sentence_before_predicate} {predicate_marker} {predicate} {predicate_marker} {sentence_after_predicate}"
+        else:
+            seq = f"{sentence_before_predicate} {predicate_marker} {predicate} {sentence_after_predicate}"
         
         # embed also the verb_form
         # In this function, since we don't repeat the predicate, separator_input_question_predicate prefixes the verb_form
         seq = self._append_verb_form(seq, row)
         
         # append predicate_type (if not captured by in predicate_marker)
-        if "predicate_type" in row and predicate_marker == self.marker_generic_predicate:
-            seq = f'{row["predicate_type"]} | {seq}' 
+        # if "predicate_type" in row and predicate_marker == self.marker_generic_predicate:
+        #     seq = f'{row["predicate_type"]} | {seq}' 
         return seq
     
     def _get_splitted_sentence_by_predicate(self, row: pd.Series):
@@ -107,7 +155,9 @@ class Preprocessor:
         return sentence_before_predicate, predicate, sentence_after_predicate
         
     def _append_verb_form(self, seq: str, df_row: pd.Series):
-        if "verb_form" not in df_row or df_row.verb_form is None:
+        if not self.data_args.append_verb_form or \
+                "verb_form" not in df_row or \
+                df_row.verb_form is None:
             return f"{seq} "
         else:
             return f"{seq} {self.separator_input_question_predicate} {df_row.verb_form} "
@@ -118,8 +168,7 @@ class Preprocessor:
     
     """
     Output Sequence preprocessing:
-    """        
-
+    """           
     def extract_targets_all(self, x: pd.DataFrame) -> str:
         """
         Extracts ((question, answers), ...)

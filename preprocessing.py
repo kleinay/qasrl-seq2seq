@@ -60,7 +60,9 @@ class Preprocessor:
                              f"options are: {list(self.preprocess_input_function_map.keys())}")
         preprocessing_function = self.preprocess_input_function_map[self.data_args.preprocess_input_func]
         input_seq = preprocessing_function(x)
-        return input_seq
+        # prepend prefix (used in T5 models to specify the task, e.g. "summarize: ")
+        prefix = self.get_sequence_prefix(x)
+        return prefix + input_seq
     
     def preprocess_output(self, x: pd.DataFrame) -> str:
         row = x.iloc[0]
@@ -147,10 +149,9 @@ class Preprocessor:
         return seq
     
     def _get_splitted_sentence_by_predicate(self, row: pd.Series):
-        sentence = row.input
-        sent_tokens = sentence.split(" ") 
+        sent_tokens = row.sentence.split(" ") 
         sentence_before_predicate = " ".join([sent_tokens[i] for i in range(int(row.predicate_idx))])
-        predicate = row.predicate
+        predicate = sent_tokens[int(row.predicate_idx)]
         sentence_after_predicate = " ".join([sent_tokens[i] for i in range(int(row.predicate_idx)+1, len(sent_tokens))])
         return sentence_before_predicate, predicate, sentence_after_predicate
         
@@ -173,14 +174,14 @@ class Preprocessor:
         """
         Extracts ((question, answers), ...)
         """
-        qa_reprs = [f"{q}{self.separator_output_question_answer}{self._flatten_targets(t)}" for q, t in zip(x.question, x.target)]
+        qa_reprs = [f"{q}{self.separator_output_question_answer}{self._flatten_targets(t)}" for q, t in zip(x.question, x.answer)]
         return f"{self.separator_output_pairs}".join(qa_reprs)
 
     def extract_targets_all_by_answer_ordering(self, x: pd.DataFrame) -> str:
         """
         Extracts ((question, answers), ...)
         """
-        qas = list(zip(x.question, x.target, x.answer_ranges))
+        qas = list(zip(x.question, x.answer, x.answer_range))
         # sort QAs by answer indices
         def sort_by_range(triplet):
             q,a,ranges=triplet
@@ -194,28 +195,28 @@ class Preprocessor:
         Extracts (answer, answer, ...)
         """
 
-        return f"{self.separator_output_answers}".join([f"{self._flatten_targets(t)}" for q, t in zip(x.question, x.target)])
+        return f"{self.separator_output_answers}".join([f"{self._flatten_targets(t)}" for q, t in zip(x.question, x.answer)])
 
     def extract_targets_only_questions(self, x: pd.DataFrame) -> str:
         """
         Extracts (question, question, ...)
         """
 
-        return f"{self.separator_output_questions}".join([f"{q}" for q, t in zip(x.question, x.target)])
+        return f"{self.separator_output_questions}".join([f"{q}" for q, t in zip(x.question, x.answer)])
 
     def extract_targets_only_questions_first_word(self, x: pd.DataFrame) -> str:
         """
         Extracts (question, question, ...)
         """
 
-        return f"{self.separator_output_questions}".join([f"{q.split(' ')[0]}" for q, t in zip(x.question, x.target)])
+        return f"{self.separator_output_questions}".join([f"{q.split(' ')[0]}" for q, t in zip(x.question, x.answer)])
 
     def extract_targets_only_first_two_question_answers(self, x: pd.DataFrame) -> str:
         """
         Extracts ((question, answer), (question, answer))
         """
 
-        return f"{self.separator_output_pairs}".join([f"{q}{self.separator_output_question_answer}{t[0]}" for q, t in list(zip(x.question, x.target))[:2]])
+        return f"{self.separator_output_pairs}".join([f"{q}{self.separator_output_question_answer}{t[0]}" for q, t in list(zip(x.question, x.answer))[:2]])
 
     def extract_targets_single(self, x: pd.DataFrame) -> str:
         """
@@ -224,7 +225,7 @@ class Preprocessor:
 
         x = x.iloc[0]
 
-        return str([f"{q}{self.separator_output_question_answer}{t[0]}" for q, t in zip([x.question], [x.target])])
+        return str([f"{q}{self.separator_output_question_answer}{t[0]}" for q, t in zip([x.question], [x.answer])])
 
     def extract_qadiscourse_targets(self, x: pd.DataFrame) -> str:
         #TODO

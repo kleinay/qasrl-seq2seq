@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union
 import wandb
 import pandas as pd
 
@@ -18,3 +18,20 @@ def reshape_qasrl_into_qanom(df: pd.DataFrame, sentences_df: Optional[pd.DataFra
     df['is_verbal'] = True
     df['verb_form'] = ' '
     return df    
+
+def replaceKeys(orig_dict, oldKeys2NewKeys, inplace=True):
+    """ replace keys with new keys using oldKeys2NewKeys mapping. """
+    target_dict = orig_dict if inplace else {}
+    for oldKey, newKey in oldKeys2NewKeys.items():
+        if oldKey in orig_dict:
+            target_dict[newKey] = orig_dict.get(oldKey)
+            if inplace and oldKey != newKey: orig_dict.pop(oldKey)
+    return target_dict
+
+def str2num(s: str) -> Union[int, float]:
+    try:
+        num = int(s)
+    except ValueError:
+        num = float(s)
+    return num
+    

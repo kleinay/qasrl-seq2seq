@@ -1,11 +1,13 @@
 #%%
 from notebook import *
 
-# prototype - for listing the valid keyword args
+# Prototype - for listing the valid keyword args (given with default values)
+
 # model_type, epochs = "t5", 30
 # wandb_run_name=f"{now()}_{epochs}ep_{model_type}_"
 # full_experiment(model_type=model_type,
 #                     train_dataset="joint_qasrl",
+#                     qanom_joint_factor=1, # how many times to duplicate qanom training set in joint training
 #                     test_dataset="qasrl",
 #                     train_epochs=epochs,
 #                     batch_size=12,
@@ -25,24 +27,29 @@ from notebook import *
 #                     description="",
 #                     )
 
-#%%
+# #%%  best joint model so far
+for model_type in ["t5", "bart"]:
+    epochs=30
+    wandb_run_name=f"{now()}_{epochs}ep_{model_type}_joint_qanom_best"
+    full_experiment(model_type=model_type,
+                        train_dataset="joint_qanom",
+                        test_dataset="qanom",
+                        train_epochs=epochs,
+                        batch_size=10,
+                        source_prefix="<predicate-type>",
+                        preprocess_input_func="input_predicate_marker",
+                        use_bilateral_predicate_marker=True,
+                        overwrite_output_dir=True,
+                        num_beams=3,
+                        logging_steps=500,
+                        wandb_run_name=wandb_run_name,
+                        dir_switch="joint_qanom_balanced",
+                        qanom_joint_factor=14,
+                        description="""pred-type prefix, bilateral marker, beams=3, qanom_factor=14""",
+                        )
+    
 
-model_type, epochs = "t5", 30
-wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_bilateral-predicate-marker"
-full_experiment(model_type=model_type,
-                    train_dataset="qanom",
-                    test_dataset="qanom",
-                    train_epochs=epochs,
-                    batch_size=12,
-                    source_prefix="<predicate-type>",
-                    preprocess_input_func="input_predicate_marker",
-                    use_bilateral_predicate_marker=True,
-                    overwrite_output_dir=True,
-                    wandb_run_name=wandb_run_name,
-                    dir_switch="qanom_bilateral",
-                    description="""predicate_marker in input preprocessing here is implemented with markers on both sided of predicate,  
-                    '<special-token> predicate <special-token>' . """,
-                    )
+
 
 #%%
 # prefix & decoding experiments
@@ -62,61 +69,61 @@ full_experiment(model_type=model_type,
 #                     description="supposed to be best qanom baseline - trained on qanom, prefix is <predicate-type> dependent, preprocessing_input_func is predicate_marker. ",
 #                     )
 
-wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_new-generic-prefix"
-full_experiment(model_type=model_type,
-                    train_dataset="qanom",
-                    test_dataset="qanom",
-                    train_epochs=epochs,
-                    batch_size=12,
-                    source_prefix="Ask and answer: ",
-                    preprocess_input_func="input_predicate_marker",
-                    overwrite_output_dir=True,
-                    wandb_run_name=wandb_run_name,
-                    dir_switch="qanom_prefix",
-                    description="same as baseline- trained on qanom, preprocessing_input_func is predicate_marker; But with prefix 'ask and answer' ",
-                    )
-wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_short-generic-prefix"
-full_experiment(model_type=model_type,
-                    train_dataset="qanom",
-                    test_dataset="qanom",
-                    train_epochs=epochs,
-                    batch_size=12,
-                    source_prefix="Parse: ",
-                    preprocess_input_func="input_predicate_marker",
-                    overwrite_output_dir=True,
-                    wandb_run_name=wandb_run_name,
-                    dir_switch="qanom_prefix",
-                    description="same as baseline- trained on qanom, preprocessing_input_func is predicate_marker; But with prefix 'Parse' ",
-                    )
-wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_beams=3"
-full_experiment(model_type=model_type,
-                    train_dataset="qanom",
-                    test_dataset="qanom",
-                    train_epochs=epochs,
-                    batch_size=12,
-                    source_prefix="<predicate-type>",
-                    preprocess_input_func="input_predicate_marker",
-                    overwrite_output_dir=True,
-                    wandb_run_name=wandb_run_name,
-                    dir_switch="qanom_beams",
-                    num_beams=3,
-                    description="trained on qanom, prefix is <predicate-type> dependent, preprocessing_input_func is predicate_marker; ",
-                    )
+# wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_new-generic-prefix"
+# full_experiment(model_type=model_type,
+#                     train_dataset="qanom",
+#                     test_dataset="qanom",
+#                     train_epochs=epochs,
+#                     batch_size=12,
+#                     source_prefix="Ask and answer: ",
+#                     preprocess_input_func="input_predicate_marker",
+#                     overwrite_output_dir=True,
+#                     wandb_run_name=wandb_run_name,
+#                     dir_switch="qanom_prefix",
+#                     description="same as baseline- trained on qanom, preprocessing_input_func is predicate_marker; But with prefix 'ask and answer' ",
+#                     )
+# wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_short-generic-prefix"
+# full_experiment(model_type=model_type,
+#                     train_dataset="qanom",
+#                     test_dataset="qanom",
+#                     train_epochs=epochs,
+#                     batch_size=12,
+#                     source_prefix="Parse: ",
+#                     preprocess_input_func="input_predicate_marker",
+#                     overwrite_output_dir=True,
+#                     wandb_run_name=wandb_run_name,
+#                     dir_switch="qanom_prefix",
+#                     description="same as baseline- trained on qanom, preprocessing_input_func is predicate_marker; But with prefix 'Parse' ",
+#                     )
+# wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_beams=3"
+# full_experiment(model_type=model_type,
+#                     train_dataset="qanom",
+#                     test_dataset="qanom",
+#                     train_epochs=epochs,
+#                     batch_size=12,
+#                     source_prefix="<predicate-type>",
+#                     preprocess_input_func="input_predicate_marker",
+#                     overwrite_output_dir=True,
+#                     wandb_run_name=wandb_run_name,
+#                     dir_switch="qanom_beams",
+#                     num_beams=3,
+#                     description="trained on qanom, prefix is <predicate-type> dependent, preprocessing_input_func is predicate_marker; ",
+#                     )
 
-wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_beams=10"
-full_experiment(model_type=model_type,
-                    train_dataset="qanom",
-                    test_dataset="qanom",
-                    train_epochs=epochs,
-                    batch_size=12,
-                    source_prefix="<predicate-type>",
-                    preprocess_input_func="input_predicate_marker",
-                    overwrite_output_dir=True,
-                    wandb_run_name=wandb_run_name,
-                    dir_switch="qanom_beams",
-                    num_beams=10,
-                    description="trained on qanom, prefix is <predicate-type> dependent, preprocessing_input_func is predicate_marker; ",
-                    )
+# wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_beams=10"
+# full_experiment(model_type=model_type,
+#                     train_dataset="qanom",
+#                     test_dataset="qanom",
+#                     train_epochs=epochs,
+#                     batch_size=12,
+#                     source_prefix="<predicate-type>",
+#                     preprocess_input_func="input_predicate_marker",
+#                     overwrite_output_dir=True,
+#                     wandb_run_name=wandb_run_name,
+#                     dir_switch="qanom_beams",
+#                     num_beams=10,
+#                     description="trained on qanom, prefix is <predicate-type> dependent, preprocessing_input_func is predicate_marker; ",
+#                     )
 
 
 

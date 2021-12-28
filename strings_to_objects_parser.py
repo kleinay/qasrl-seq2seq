@@ -43,7 +43,7 @@ class StringsToObjectsParser:
         skipped_predictions = []
         predictions = [x.replace(self.pad_token, "").strip() for x in predictions]
 
-        for prediction, sentence, qasrl_idx, predicate_idx, predicate in zip(predictions, predict_dataset['sentence'], predict_dataset['qasrl_id'], predict_dataset['predicates_indices'], predict_dataset['predicates']):
+        for prediction, sentence, qasrl_idx, predicate_idx, predicate in zip(predictions, predict_dataset['sentence'], predict_dataset['qasrl_id'], predict_dataset['predicate_idx'], predict_dataset['predicate']):
             questions_answers, skipped_pairs_strs = self._str_to_qasrl_gs_arguments(prediction, sentence, qasrl_idx, predicate_idx, predicate)
             qasrl_predictions.extend(questions_answers)
             skipped_predictions.extend(skipped_pairs_strs)
@@ -52,10 +52,10 @@ class StringsToObjectsParser:
 
         return qasrl_predictions, skipped_predictions
 
-    def _str_to_qasrl_gs_arguments(self, question_str: str, sentence: str, qasrl_idx: str, verb_idx: int, verb:str) -> Tuple[List[QuestionAnswer], List[str]]:
+    def _str_to_qasrl_gs_arguments(self, prediction_seq: str, sentence: str, qasrl_idx: str, verb_idx: int, verb:str) -> Tuple[List[QuestionAnswer], List[str]]:
         questions_answers = []
         skipped_pairs_strs = []
-        pairs_strs = question_str.split(self.separator_output_pairs)
+        pairs_strs = prediction_seq.split(self.separator_output_pairs)
         for pair_str in pairs_strs:
             try:
                 question_str, arguments_strs = pair_str.split(self.separator_output_question_answer)

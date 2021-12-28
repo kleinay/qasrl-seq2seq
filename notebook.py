@@ -1,7 +1,8 @@
 # To add a new cell, type '# %%'
 # To add a new markdown cell, type '# %% [markdown]'
 # %%
-from typing import Literal, Any, Dict, List
+from shutil import Error
+from typing import Literal, Any, Dict, List, Optional
 from IPython import get_ipython
 from traitlets.traitlets import default
 import wandb
@@ -31,15 +32,17 @@ tmp_dir = os.environ.get("HOME") + "/tmp"
 qasrl_2015_params = ['--dataset_name', 'qa_srl']
 qasrl_2018_params = ['--dataset_name', 'biu-nlp/qa_srl2018']
 qasrl_2020_params = [
-    "--train_file", "qasrl_gs/data/gold/all.dev.combined.csv",
-    "--validation_file", "qasrl_gs/data/gold/all.dev.combined.csv",
-    "--test_file", "qasrl_gs/data/gold/all.test.combined.csv",
-    "--text_column", "sentence", 
-    "--summary_column", "answer"
+    # "--train_file", "qasrl_gs/data/gold/all.dev.combined.csv",
+    # "--validation_file", "qasrl_gs/data/gold/all.dev.combined.csv",
+    # "--test_file", "qasrl_gs/data/gold/all.test.combined.csv",
+    '--dataset_name', 'biu-nlp/qa_srl2020'
 ]
 qanom_params = ['--dataset_name', 'biu-nlp/qanom']
-joint_qasrl_params = ['--dataset_name', '{train: biu-nlp/qanom, kleinay/qa_srl2018; validation: biu-nlp/qa_srl2020; test: biu-nlp/qa_srl2020}']  
-joint_qanom_params = ['--dataset_name', '{train: biu-nlp/qanom, kleinay/qa_srl2018; validation: biu-nlp/qanom; test: biu-nlp/qanom}']  
+
+def get_joint_params(test_task, qanom_factor=1) -> List[str]:
+    test_dataset = "biu-nlp/qanom" if test_task=="qanom" else "biu-nlp/qa_srl2020"
+    qanom_factor_str = f"{qanom_factor} *" if qanom_factor != 1 else ""
+    return ['--dataset_name', '{train:' f'{qanom_factor_str} biu-nlp/qanom, biu-nlp/qa_srl2018; validation: {test_dataset}; test: {test_dataset}' '}']
 
 qadiscourse_params = ['--dataset_name', 'biu-nlp/qa_discourse']
 
@@ -130,6 +133,7 @@ def train(model_type,
           wandb_run_name=None, # a way to name experiment in wandb 
           limit_train_data=None,
           limit_eval_data=None,
+          qanom_joint_factor=1, # how many times to duplicate qanom training set in joint training 
           **kwargs):
 
     wandb_run_name = wandb_run_name or f"{now()}_{model_type}_train-on-{qasrl_train_dataset}_{train_epochs}-ep"
@@ -174,9 +178,9 @@ def train(model_type,
     elif qasrl_train_dataset == "qanom":
         sys.argv.extend(qanom_params)
     elif qasrl_train_dataset == "joint_qasrl":
-        sys.argv.extend(joint_qasrl_params)
+        sys.argv.extend(get_joint_params("qasrl", qanom_joint_factor))
     elif qasrl_train_dataset == "joint_qanom":
-        sys.argv.extend(joint_qanom_params)
+        sys.argv.extend(get_joint_params("qanom", qanom_joint_factor))
     elif qasrl_train_dataset == "qadiscourse":
         sys.argv.extend(qadiscourse_params)
     else:
@@ -236,7 +240,7 @@ def predict(model_type, qasrl_test_dataset, model_dir, run=None, **kwargs):
     else:
         raise ValueError(f"qasrl_test_dataset doesn't exist ; qasrl_test_dataset {qasrl_test_dataset}")
 
-    results, run = main(generate_sentence_column_in_prediction= qasrl_test_dataset in ["qanom", "2020"])
+    results, run = main()
     return run
 
 
@@ -247,6 +251,7 @@ def predict(model_type, qasrl_test_dataset, model_dir, run=None, **kwargs):
 
 def decode_into_qasrl(model_dir, test_dataset):
     "Call qasrl_state_machine_example within docker container to verify question formats match QASRL slots. "
+    model_dir = os.path.abspath(model_dir)
     if wandb.run is None:
         utils.setup_wandb(True, f"decoding {'/'.join(model_dir.split('/')[-3:])}")
     os.environ["MODEL_DIR"] = model_dir 
@@ -265,10 +270,10 @@ def decode_into_qasrl(model_dir, test_dataset):
     wandb.save(f"{model_dir}/qasrl_state_machine_output.txt")
     if completed_process.returncode != 0: # Raise exception if subprocess ended with error
         print(f"Docker process failed (returncode=={completed_process.returncode}). \n"
-              f"Standard Error: \n{completed_process.stderr}\n\n" 
+              f"Standard Error: \n\n{completed_process.stderr}\n" 
               f"Run the command on console to see details: \n\n{shell_command}\n\n"
               f"Alternatively, run this function from a python notebook: decode_into_qasrl('{model_dir}','{test_dataset}')")
-    
+        raise ChildProcessError(f"Docker process failed with error code {completed_process.returncode}")
     # copy state_machine_output file to have a non-root priviliges file (docker is run by root)
     from shutil import copyfile
     copyfile(f"{model_dir}/state_machine_output.csv", f"{model_dir}/decoded_output.csv")
@@ -314,6 +319,7 @@ def full_experiment(model_type: Literal["bart", "t5", "t5-large"] = "bart",
                     description: str = "",
                     finish_wandb = True,
                     fp16 = True,
+                    qanom_joint_factor=1,
                     **kwargs):
     
     model_dir = get_model_dir(model_type, train_dataset, dir_switch)
@@ -323,12 +329,14 @@ def full_experiment(model_type: Literal["bart", "t5", "t5-large"] = "bart",
                              test_dataset=test_dataset,
                              train_epochs=train_epochs,
                              fp16=fp16,
+                             qanom_joint_factor=qanom_joint_factor,
+                             dir_switch=dir_switch,
                              **kwargs)
     
     qasrl_train_dataset = "2018" if train_dataset == "qasrl" else train_dataset
     qasrl_test_dataset = "2020" if test_dataset == "qasrl" else test_dataset
 
-    run = train(model_type, qasrl_train_dataset, train_epochs, model_dir, **kwargs)
+    run = train(model_type, qasrl_train_dataset, train_epochs, model_dir, qanom_joint_factor=qanom_joint_factor, **kwargs)
     wandb.config.update(experiment_kwargs, allow_val_change=True)
     # save configuration of experiment
     with open(f"{model_dir}/experiment_kwargs.json", "w") as fout:
@@ -367,6 +375,86 @@ kwargs for `full_experiment` (and `run_summarization` script):
 ...      
 
 """
+
+def load_and_predict(saved_model_path: str, test_file, 
+                     output_dir=None, 
+                     wandb_run_name=None, 
+                     decode_qasrl: bool = True, 
+                     text_column=None, **kwargs):
+    
+    # load kwargs from the trained model directory
+    experiment_kwargs = json.load(open(os.path.join(saved_model_path, "experiment_kwargs.json")))
+
+    # prepare the arguments for the run_summarization script:
+    
+    # if output_dir not provided, default to model dir/inference_outputs
+    output_dir = output_dir or os.path.join(saved_model_path, "inference_outputs")
+    os.makedirs(output_dir, exist_ok=True)
+    wandb_run_name = wandb_run_name or f"QASRL Inference on {test_file}"
+    
+    args_to_send = [
+        'run_summarization.py',
+        '--model_name_or_path', saved_model_path,
+        '--test_file', test_file,
+        '--do_predict',
+        '--predict_with_generate',
+        '--eval_accumulation_steps', '10',  # Necessary to avoid OOM where all predictions are kept on one GPU    
+        '--report_to', 'wandb',
+        '--wandb_run_name', wandb_run_name, 
+        '--output_dir', output_dir,
+        # required:  TODO improve
+        # '--pad_to_max_length', 'true',
+    ]
+        
+    if text_column: # default value is "sentence"
+        args_to_send += [
+            "--text_column", text_column, 
+        ]
+            
+    defaults = get_default_kwargs() # use defaults to account for possibly new kwargs not present in loaded model's experiment_kwargs.json config file
+    experiment_kwargs = dict(defaults, **experiment_kwargs) # override defaults with loaded kwargs
+    kwargs = dict(experiment_kwargs, **kwargs)   # integrate loaded-experiment kwargs values and override them by function's **kwargs
+
+    if "batch_size" in kwargs and kwargs["batch_size"] is not None:
+        kwargs["per_device_train_batch_size"] = kwargs["batch_size"]
+        kwargs["per_device_eval_batch_size"] = kwargs["batch_size"]
+        kwargs.pop("batch_size")    
+    
+    kwargs_not_to_be_sent = ('description', 'train_dataset', 'test_dataset', 'train_epochs', 'wandb_run_name', 'output_dir')
+    for kw in kwargs_not_to_be_sent:
+        kwargs.pop(kw, None)
+    
+    kwargs_to_send = linearize_kwargs_to_send_model(kwargs)
+    args_to_send.extend(kwargs_to_send)
+    
+    # Run predict
+    sys.argv = args_to_send
+    results, run = main()
+    
+    # decode to qasrl-format
+    if decode_qasrl:
+        decode_into_qasrl(model_dir=output_dir,
+                          test_dataset="qanom" # this flags that prediction_output will have `sentence` column
+                          )    
+    return run
+
+
+def load_trained_model(name_or_path):
+    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
+    tokenizer = AutoTokenizer.from_pretrained(name_or_path)
+    model = AutoModelForSeq2SeqLM.from_pretrained(name_or_path)   
+    return model, tokenizer
+    
+def upload_trained_model(saved_model_path, repo_name):
+    model, tokenizer = load_trained_model(saved_model_path)
+    model.push_to_hub(repo_name)
+    tokenizer.push_to_hub(repo_name)
+    # upload also the "experiment_kwargs.json" file for preprocessing and postprocessing switches
+    from huggingface_hub import upload_file
+    upload_file(f"{saved_model_path}/experiment_kwargs.json", 
+                path_in_repo="preprocessing_kwargs.json", 
+                repo_id=f"kleinay/{repo_name}")
+    
 
 if __name__ == "__main__":
     # model_type = "bart"

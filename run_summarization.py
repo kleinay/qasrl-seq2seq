@@ -55,7 +55,7 @@ from transformers.utils.versions import require_version
 from preprocessing import Preprocessor
 from qasrl_gs.scripts.common import QuestionAnswer
 from qasrl_gs.scripts.evaluate import evaluate
-from utils import setup_wandb
+from utils import setup_wandb, replaceKeys, str2num
 
 check_min_version("4.10.0.dev0")
 
@@ -157,10 +157,10 @@ class DataTrainingArguments:
         default=None,
         metadata={"help": "The name of the column in the datasets containing the full texts (for summarization)."},
     )
-    summary_column: Optional[str] = field(
-        default=None,
-        metadata={"help": "The name of the column in the datasets containing the summaries (for summarization)."},
-    )
+    # summary_column: Optional[str] = field(
+    #     default=None,
+    #     metadata={"help": "The name of the column in the datasets containing the summaries (for summarization)."},
+    # )
     train_file: Optional[str] = field(
         default=None, metadata={"help": "The input training data file (a jsonlines or csv file)."}
     )
@@ -273,10 +273,16 @@ class DataTrainingArguments:
         # Literal["pre", "post"]
         default=None, metadata={"help": "Whether and how incorporate `predicate_type` info into the output sequence, as an MTL objective to enhance joint learning."}
     ) 
+    
+    # Arguments for inference (predict)
+    predicate_type: Optional[str] = field(
+        default=None, metadata={"help": "Either 'verbal' or 'nominal'; this will determine the `predicate_type` during inference, if the input file doesn't have 'predicate_type' column."}
+    ) 
 
     def __post_init__(self):
         if self.dataset_name is None and self.train_file is None and self.validation_file is None:
-            raise ValueError("Need either a dataset name or a training/validation file.")
+            # raise ValueError("Need either a dataset name or a training/validation file.")
+            pass
         else:
             if self.train_file is not None:
                 extension = self.train_file.split(".")[-1]
@@ -286,25 +292,6 @@ class DataTrainingArguments:
                 assert extension in ["csv", "json"], "`validation_file` should be a csv or a json file."
         if self.val_max_target_length is None:
             self.val_max_target_length = self.max_target_length
-
-
-summarization_name_mapping = {
-    "amazon_reviews_multi": ("review_body", "review_title"),
-    "big_patent": ("description", "abstract"),
-    "cnn_dailymail": ("article", "highlights"),
-    "orange_sum": ("text", "summary"),
-    "pn_summary": ("article", "summary"),
-    "psc": ("extract_text", "summary_text"),
-    "samsum": ("dialogue", "summary"),
-    "thaisum": ("body", "summary"),
-    "xglue": ("news_body", "news_title"),
-    "xsum": ("document", "summary"),
-    "wiki_summary": ("article", "highlights"),
-    "qa_srl": ("sentence", "answers"),
-    "kleinay/qa_srl2018": ("sentence", "answers"),  # kleinay's version have aligned features with qanom 
-    "biu-nlp/qa_srl2020": ("sentence", "answers"),
-    "biu-nlp/qanom": ("sentence", "answers")
-}
 
 
 def _clean_mem():
@@ -327,7 +314,7 @@ def _freeze_parameters(model):
         param.requires_grad = True
 
 
-def main(generate_sentence_column_in_prediction=False):
+def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
@@ -437,21 +424,44 @@ def main(generate_sentence_column_in_prediction=False):
             source_dataset_dicts = [load_dataset_dict_with_predicate_type(dataset_name)
                                for dataset_name in source_datasets_names]
             raw_datasets = datasets.DatasetDict({
-                split: datasets.interleave_datasets([dataset[split] for dataset in source_dataset_dicts])
+                split: datasets.source_datasets([dataset[split] for dataset in source_dataset_dicts], info=source_dataset_dicts[0].info)
                 for split in source_dataset_dicts[0]
             })
         # Optionally, dataset_name is a dict, specifying different datasets for different splits,
-        # given in the form {train: dataset_1, dataset_2; validation: ...; test: ...}
+        # given in the form {train: dataset_1, dataset_2; validation: ...; test: ...}.
+        #   We can also specify a factor in which we "duplicate" each dataset to have custom train-set proportions; e.g.
+        # {train: 5 * dataset_1, dataset_2; validation: ...; test: ...}   will repeat dataset_1 5-times in the resulting training-set.  
         elif data_args.dataset_name.startswith("{"):
             split_datasets_str = data_args.dataset_name[1:-1].split("; ")
             datasets_str_per_split = dict([d.split(":") for d in split_datasets_str])
-            datasets_names_per_split = {spl: datasets.split(",") 
+            datasets_specifications_per_split = {spl: datasets.split(",") 
                                         for spl, datasets in datasets_str_per_split.items()}
-            datasets_loaded_per_split = {spl: [load_dataset_with_predicate_type(dataset_name, spl)
-                                               for dataset_name in datasets_names]
-                                         for spl, datasets_names in datasets_names_per_split.items()}
+            def get_facotr_and_name_from_dataset_specification(specification: str) -> Tuple[int, str]:
+                # extract duplication factors per dataset_specification
+                if "*" not in specification:
+                    return 1, specification
+                else:
+                    factor, name = specification.split("*")
+                    return str2num(factor), name
+            dataset_factor_and_name_per_split: Dict[str, List[Tuple[int, str]]]
+            dataset_factor_and_name_per_split = {spl: [get_facotr_and_name_from_dataset_specification(dataset_specification)
+                                                       for dataset_specification in dataset_specification_list]
+                                                 for spl, dataset_specification_list in datasets_specifications_per_split.items()}
+            # implement duplication factor by concatenating loaded Dataset objects from the same type, and interleaving the different types
+            datasets_loaded_per_split = {}
+            for spl, dataset_specs in dataset_factor_and_name_per_split.items():
+                loaded_datasets = []
+                for factor, name in dataset_specs:
+                    dataset: Dataset = load_dataset_with_predicate_type(name, spl)
+                    if isinstance(factor, int):
+                        dupl_dataset = datasets.concatenate_datasets([dataset] * factor, info=dataset.info)
+                    else: # isinstance(facotr, float):
+                        dupl_dataset = dataset.select(range(int(len(dataset) * factor))) 
+                    loaded_datasets.append(dupl_dataset)
+                datasets_loaded_per_split[spl] = loaded_datasets
+            # interleave the different-typed datasets 
             raw_datasets = datasets.DatasetDict({
-                split: datasets.interleave_datasets(source_datasets)
+                split: datasets.concatenate_datasets(source_datasets, info=source_datasets[0].info)
                 for split, source_datasets in datasets_loaded_per_split.items()
             })
             
@@ -554,8 +564,6 @@ def main(generate_sentence_column_in_prediction=False):
     if model.config.decoder_start_token_id is None:
         raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
 
-    prefix = data_args.source_prefix if data_args.source_prefix is not None else ""
-
     # Preprocessing the datasets.
     # We need to tokenize inputs and targets.
     if training_args.do_train:
@@ -569,7 +577,6 @@ def main(generate_sentence_column_in_prediction=False):
         return
 
     # Get the column names for input/target.
-    dataset_columns = summarization_name_mapping.get(data_args.dataset_name, None)
     if data_args.text_column is None:
         # text_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
         text_column = 'sentence'
@@ -578,15 +585,6 @@ def main(generate_sentence_column_in_prediction=False):
         if text_column not in column_names:
             raise ValueError(
                 f"--text_column' value '{data_args.text_column}' needs to be one of: {', '.join(column_names)}"
-            )
-    if data_args.summary_column is None:
-        # summary_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
-        summary_column = 'answers'
-    else:
-        summary_column = data_args.summary_column
-        if summary_column not in column_names:
-            raise ValueError(
-                f"--summary_column' value '{data_args.summary_column}' needs to be one of: {', '.join(column_names)}"
             )
 
     # Temporarily set max_target_length for training.
@@ -610,7 +608,8 @@ def main(generate_sentence_column_in_prediction=False):
                  PREDICATE_NOMINALIZATION_MARKER,
                  tokenizer.eos_token)
 
-    def preprocess_function__questions_answers(examples, extract_inputs_func, extract_outputs_func):
+    # Preprocssing for train and eval - preparing both input sequence and expected output sequence ("labels")
+    def preprocess_function(examples):
         inputs = examples[text_column]
         batch_size = len(inputs)
         # in 2015 dataset the column is predicate, and in 2020 it is verb
@@ -620,7 +619,7 @@ def main(generate_sentence_column_in_prediction=False):
         # in 2015 dataset the question is an array, and in 2020 it is a string
         questions = [" ".join(x) if isinstance(x, list) else x for x in examples['question']]
         # in 2015 dataset the answers is an array, and in 2020 it is a string separated by ~!~
-        targets = [x.split("~!~") if isinstance(x, str) else x for x in examples[summary_column]]
+        answers = [x.split("~!~") if isinstance(x, str) else x for x in examples['answers']]
         if 'answer_ranges' in examples:
             # in qasrl-2018 and qanom, the answer_range is an array, 
             answer_ranges = [x.split("~!~") if isinstance(x, str) else x for x in examples['answer_ranges']]
@@ -648,25 +647,22 @@ def main(generate_sentence_column_in_prediction=False):
 
         predicates = examples[predicate_key]
         predicate_indices = examples[predicate_index_key]
-
-        df = pd.DataFrame([{"input": input, "predicate": predicate, 
-                            "question": question, "target": target, "answer_ranges": answer_range, 
+                
+        df = pd.DataFrame([{"sentence": input, "predicate": predicate, 
+                            "question": question, "answer": answer, "answer_range": answer_range, 
                             "predicate_idx": predicate_idx, "qasrl_id": qasrl_id, 
                             "verb_form": verb_form, "is_verbal": is_verbal, "predicate_type": pred_type} 
-                           for input, predicate, question, target, answer_range, predicate_idx, qasrl_id, verb_form, is_verbal, pred_type in 
-                           zip(inputs, predicates, questions, targets, answer_ranges, predicate_indices, qasrl_ids, verb_forms, is_verbals, pred_types)
+                           for input, predicate, question, answer, answer_range, predicate_idx, qasrl_id, verb_form, is_verbal, pred_type in 
+                           zip(inputs, predicates, questions, answers, answer_ranges, predicate_indices, qasrl_ids, verb_forms, is_verbals, pred_types)
                            if question # TODO change to is_verbal     # Don't train on non-predicates
                            ])     
 
-        grouped_df = df.groupby(['input', 'predicate'])
-        inputs = grouped_df.apply(extract_inputs_func).tolist()
-        targets = grouped_df.apply(extract_outputs_func).tolist()
-
-        # integrate prefix into input sequences
-        prefixes = grouped_df.apply(preprocessor.get_sequence_prefix).tolist()
-        inputs = [prefix + inp for inp, prefix in zip(inputs, prefixes)]
+        grouped_df = df.groupby(['sentence', 'predicate_idx'])
+        preprocessed_inputs = grouped_df.apply(preprocessor.preprocess_input).tolist()
+        targets = grouped_df.apply(preprocessor.preprocess_output).tolist()
         
-        model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
+        # Tokenizing the input sequences
+        model_inputs = tokenizer(preprocessed_inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
 
         # Setup the tokenizer for targets
         with tokenizer.as_target_tokenizer():
@@ -678,18 +674,59 @@ def main(generate_sentence_column_in_prediction=False):
             labels["input_ids"] = [
                 [(l if l != tokenizer.pad_token_id else -100) for l in label] for label in labels["input_ids"]
             ]
-
         model_inputs["labels"] = labels["input_ids"]
         # We can take index 0 because of the group by all values have the same predicate
-        model_inputs["predicates"] = grouped_df.apply(lambda x: x.iloc[0])['predicate'].tolist()
-        model_inputs["predicates_indices"] = grouped_df.apply(lambda x: x.iloc[0])['predicate_idx'].tolist()
-        model_inputs["sentence"] = grouped_df.apply(lambda x: x.iloc[0])['input'].tolist()
-        model_inputs["qasrl_id"] = grouped_df.apply(lambda x: x.iloc[0])['qasrl_id'].tolist()
+        predicate_level_df = grouped_df.apply(lambda x: x.iloc[0])
+        model_inputs["predicate"] = predicate_level_df['predicate'].tolist()
+        model_inputs["predicate_idx"] = predicate_level_df['predicate_idx'].tolist()
+        model_inputs["sentence"] = predicate_level_df['sentence'].tolist()
+        model_inputs["qasrl_id"] = predicate_level_df['qasrl_id'].tolist()
         return model_inputs
     
-    # preprocess_function = lambda x: preprocess_function__questions_answers(x, preprocess_input_function_map[data_args.preprocess_input_func], 
-    #                                                                        preprocess_output_function_map[data_args.preprocess_output_func])
-    preprocess_function = lambda x: preprocess_function__questions_answers(x, preprocessor.preprocess_input, preprocessor.preprocess_output)
+    def preprocess_for_inference(examples):
+        batch_size = len(examples[text_column]) 
+        tok_sents = [sent.split(" ") for sent in examples[text_column]]
+        # Be permissive about column names (for ease of inference)
+        predicate_index_key = ({'predicate_idx','verb_idx','target_idx'} & examples.keys()).pop()
+        predicate_indices = examples[predicate_index_key]
+        predicate_keys = ({'predicate','verb','noun'} & examples.keys())
+        predicate_key = predicate_keys.pop() if predicate_keys else None                
+        qasrl_id_keys = ({'qasrl_id','sent_id','sentence_id', 'SentenceId'} & examples.keys())
+        qasrl_id_key = qasrl_id_keys.pop() if qasrl_id_keys else None
+       
+        examples2 = replaceKeys(examples, {text_column: "sentence", predicate_index_key: "predicate_idx", predicate_key: "predicate", qasrl_id_key: "qasrl_id"}, inplace=False) 
+        df = pd.DataFrame(examples2)
+        
+        for required_key in ("verb_form", "predicate_type"):
+            if required_key not in df.columns:
+                df[required_key] = None
+        # Make sure returned dataset have "predicate" & "qasrl_id" columns, required for parsing output into qasrl format
+        if 'predicate' not in df.columns:
+            df['predicate'] = [toks[i] for toks, i in zip(tok_sents, predicate_indices)]
+        if 'qasrl_id' not in df.columns:
+            sent2id = {sent: f"sent_{i+1}" for i,sent in enumerate(set(df['sentence']))}
+            df['qasrl_id'] = df['sentence'].apply[sent2id.get]
+        
+        # if dataset has an "is_verbal" column (e.g. when it is taken from qanom predicate_detector's output), only predict for positive predicates
+        if "is_verbal" in df.columns:
+            df = df[df["is_verbal"]]
+                
+        # preprocess input sequence (tokenized sentence, predicate marking, incorporating verb_form or predicate_type information, etc.)
+        grouped_df = df.groupby(['sentence', 'predicate_idx'])  
+
+        preprocessed_inputs = grouped_df.apply(preprocessor.preprocess_input).tolist()
+        # Tokenizing the input sequences
+        model_inputs = tokenizer(preprocessed_inputs, max_length=data_args.max_source_length, 
+                                 padding=padding, truncation=True)
+        
+        predicate_level_df = grouped_df.apply(lambda x: x.iloc[0]) # instance-level --- #-rows is as #-predicates (=instances)
+
+        model_inputs["predicate_idx"] = predicate_level_df['predicate_idx'].tolist()
+        model_inputs["sentence"] = predicate_level_df['sentence'].tolist()
+        model_inputs["predicate"] = predicate_level_df['predicate'].tolist()  
+        model_inputs["qasrl_id"] = predicate_level_df['qasrl_id'].tolist()
+        return model_inputs        
+
 
     _clean_mem()
     if training_args.do_train:
@@ -710,9 +747,8 @@ def main(generate_sentence_column_in_prediction=False):
                 desc="Running tokenizer on train dataset",
             )
         # log a sample of training instances 
-        data_examples = train_dataset[:3]
-        for i, dt_ex in enumerate(data_examples):
-            logger.info(f"Data example ({i}): {dt_ex}") 
+        data_example = train_dataset[0]
+        logger.info(f"Data example: {data_example}") 
 
     if training_args.do_eval:
         max_target_length = data_args.val_max_target_length
@@ -738,9 +774,18 @@ def main(generate_sentence_column_in_prediction=False):
         predict_dataset = raw_datasets["test"]
         if data_args.max_predict_samples is not None:
             predict_dataset = predict_dataset.select(range(data_args.max_predict_samples))
+        
+        # If predict_dataset includes gold standard reference, use the regular preprocessing which also prepares `labels`;
+        # Otherwise, do inference without labels 
+        if "question" in predict_dataset and "answers" in predict_dataset:
+            do_inference_without_labels = False
+            preprocessing_func_for_test = preprocess_function
+        else:
+            do_inference_without_labels = True
+            preprocessing_func_for_test = preprocess_for_inference
         with training_args.main_process_first(desc="prediction dataset map pre-processing"):
             predict_dataset = predict_dataset.map(
-                preprocess_function,
+                preprocessing_func_for_test,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
@@ -760,10 +805,12 @@ def main(generate_sentence_column_in_prediction=False):
     # Metric
     rouge_metric = load_metric("rouge")
     exact_match_metric = load_metric("metrics/exact_match.py")
+    element_exact_match_metric = load_metric("metrics/element_exact_match.py")
+    wh_answer_exact_match_metric = load_metric("metrics/wh_qasrl_match.py")
 
     def postprocess_text(preds, labels):
-        preds = [pred.strip() for pred in preds]
-        labels = [label.strip() for label in labels]
+        preds = [pred.lstrip("</s>").rstrip("<pad>").rstrip("</s>").strip() for pred in preds]
+        labels = [label.lstrip("</s>").rstrip("<pad>").rstrip("</s>").strip() for label in labels]
 
         # rougeLSum expects newline after each sentence
         preds = ["\n".join(nltk.sent_tokenize(pred)) for pred in preds]
@@ -776,11 +823,11 @@ def main(generate_sentence_column_in_prediction=False):
         preds, labels = eval_preds
         if isinstance(preds, tuple):
             preds = preds[0]
-        decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+        decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=False, clean_up_tokenization_spaces=True)
         if data_args.ignore_pad_token_for_loss:
             # Replace -100 in the labels as we can't decode them.
             labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=False, clean_up_tokenization_spaces=True)
 
         # Some simple post-processing
         decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
@@ -791,12 +838,24 @@ def main(generate_sentence_column_in_prediction=False):
 
         prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
         result["gen_len"] = np.mean(prediction_lens)
-        # Compute exact match
+        # Compute exact match (predicate-level)
         em_results = exact_match_metric.compute(predictions=decoded_preds, references=decoded_labels)
         result["exact_match"] = em_results['accuracy']
+        # Compute element exact match (QA level)
+        eem_results = element_exact_match_metric.compute(predictions=decoded_preds, references=decoded_labels, separator=SEPARATOR_OUTPUT_PAIRS)
+        result["QA_exact_match_P"] = eem_results['precision']
+        result["QA_exact_match_R"] = eem_results['recall']
+        result["QA_exact_match_F1"] = eem_results['f1']
+        wh_a_em_results = wh_answer_exact_match_metric.compute(predictions=decoded_preds, references=decoded_labels, 
+                                                               qa_pairs_sep=SEPARATOR_OUTPUT_PAIRS, qa_sep=SEPARATOR_OUTPUT_QUESTION_ANSWER)
+        result["Wh_and_answer_EM_P"] = wh_a_em_results['precision']
+        result["Wh_and_answer_EM_R"] = wh_a_em_results['recall']
+        result["Wh_and_answer_EM_F1"] = wh_a_em_results['f1']
         
         # log to wandb some of the evaluation measures
-        measures_to_send_wandb = ["rouge1", "rouge2", "gen_len", "exact_match"]
+        measures_to_send_wandb = ["rouge1", "rouge2", "gen_len", "exact_match", 
+                                  "QA_exact_match_P", "QA_exact_match_R", "QA_exact_match_F1",
+                                  "Wh_and_answer_EM_P", "Wh_and_answer_EM_R", "Wh_and_answer_EM_F1"]
         wandb_results = {k:v for k,v in result.items() if k in measures_to_send_wandb}
         wandb.log(wandb_results)
         
@@ -812,8 +871,8 @@ def main(generate_sentence_column_in_prediction=False):
             predict_dataset = predict_dataset.shuffle(seed=42).select(range(5))
 
     # Modify training_args before initializing Trainer, to allow evaluation during training
-    training_args.evaluation_strategy = 'steps' # 'no', 'epoch' or 'steps'
-    training_args.eval_steps = 100       
+    training_args.evaluation_strategy = transformers.trainer_utils.IntervalStrategy.STEPS # 'NO', 'EPOCH' or 'STEPS'
+    training_args.eval_steps = 500       
 
     # Initialize our Trainer
     trainer = Seq2SeqTrainer(
@@ -876,12 +935,18 @@ def main(generate_sentence_column_in_prediction=False):
         tokenizer.pad_token
     )
 
-    output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.csv")
+    if "output_file" in training_args.__dict__:
+        output_prediction_file = training_args.output_file
+    else:
+        output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.csv")
     invalid_output_prediction_file = os.path.join(training_args.output_dir, "invalid_generated_predictions.csv")
     if training_args.do_predict:
         _clean_mem()
         logger.info("*** Predict ***")
 
+        if do_inference_without_labels and model_args.model_type == 't5':
+            # T5 decoders expect to be initialized with the pad_token
+            predict_dataset = predict_dataset.add_column('labels', [[tokenizer.pad_token_id]] * predict_dataset.num_rows)
         predict_results = trainer.predict(
             predict_dataset,
             metric_key_prefix="predict",
@@ -908,7 +973,9 @@ def main(generate_sentence_column_in_prediction=False):
                 i = 0
                 logger.info(f"\n\n**      Example (idx: {i}):      **")
                 logger.info(f"* Input Seq:\t\t {tokenizer.decode(predict_dataset[i]['input_ids']).rstrip('<pad>')}")
-                logger.info(f"* Gold Output:\t\t {tokenizer.decode(predict_dataset[i]['labels']).rstrip('<pad>')}")
+                
+                if 'labels' in predict_dataset[0]:
+                    logger.info(f"* Gold Output:\t\t {tokenizer.decode(predict_dataset[i]['labels']).rstrip('<pad>')}")
                 logger.info(f"* Predicted Output:\t {predictions[i].rstrip('<pad>')}")
                 
                 #TODO remove non-QASRL segments of the output sequences 
@@ -916,7 +983,7 @@ def main(generate_sentence_column_in_prediction=False):
 
                 predicted_QAs: List[QuestionAnswer]; invalid_pred_seqs: List[str] 
                 predicted_QAs, invalid_pred_seqs = strings_to_objects_parser.to_qasrl_gs_csv_format(predict_dataset, predictions)
-                prediction_output = pd.DataFrame([x.to_dict() for x in predicted_QAs])
+                parsed_predictions = pd.DataFrame([x.to_dict() for x in predicted_QAs])
                 # Log invalid output sequences
                 logger.info(f"Number of invalid (mal-structued) predicted output sequences: {len(invalid_pred_seqs)} (%{100*len(invalid_pred_seqs)/len(predictions):.1f})"
                             f"\n  Saving them into {invalid_output_prediction_file}")
@@ -927,18 +994,18 @@ def main(generate_sentence_column_in_prediction=False):
                 invalid_types_relative_frequency = invalid_types_relative_frequency.to_frame().transpose()
                 wandb.log({"invalid output sequences - relative frequency": invalid_types_relative_frequency}, commit=False)
 
-                if generate_sentence_column_in_prediction and len(prediction_output)>0:
+                if len(parsed_predictions)>0 and "sentence" in predict_dataset.column_names:
                     qasrl_id2sent = {r["qasrl_id"]:r["sentence"] for r in predict_dataset}
-                    prediction_output['sentence'] = prediction_output['qasrl_id'].apply(qasrl_id2sent.get) # predict_dataset['qasrl_id']
+                    parsed_predictions['sentence'] = parsed_predictions['qasrl_id'].apply(qasrl_id2sent.get) # predict_dataset['qasrl_id']
                 
                 logger.info(f"Saving predictions into {output_prediction_file}...")
-                if len(prediction_output) == 0:
+                if len(parsed_predictions) == 0:
                     # write empty csv with correct header
                     header = "qasrl_id,verb_idx,verb,question,answer,answer_range,verb_form,wh,aux,subj,obj,prep,obj2,is_negated,is_passive,sentence"
                     with open(output_prediction_file, "w") as fout:
                         fout.write(header)
                 else:
-                    prediction_output.to_csv(output_prediction_file, index=False) 
+                    parsed_predictions.to_csv(output_prediction_file, index=False) 
                 wandb.save(output_prediction_file)
         
     if training_args.push_to_hub:

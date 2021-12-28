@@ -17,8 +17,8 @@ class TestStringsToObjectsParser:
         dataset = {
             "sentence": ["He lodged near the hospital at 28 St Thomas \'s Street in Southwark , with other medical students , including Henry Stephens who became a famous inventor and ink magnate ."],
             "qasrl_indices": ["some_id"],
-            "predicates": ["lodged"],
-            "predicates_indices": [1]
+            "predicate": ["lodged"],
+            "predicate_idx": [1]
         }
 
         separator_output_answers = "<extra_id_3>"

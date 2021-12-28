@@ -17,6 +17,7 @@
 Fine-tuning the library models for sequence to sequence.
 """
 # You can also adapt this script on your own sequence to sequence task. Pointers for this are left as comments.
+from argparse import Namespace
 import json
 import logging
 import os
@@ -485,37 +486,30 @@ def main():
 
     # Special tokens used in modelling the sequences
     all_special_tokens = None
+    special_tokens_constants = Namespace() 
     if is_t5_model:
         # T5 model have 100 special tokens by default
-        SEPARATOR_INPUT_QUESTION_PREDICATE = "<extra_id_1>"
-        SEPARATOR_OUTPUT_ANSWERS = "<extra_id_3>"
-        SEPARATOR_OUTPUT_QUESTIONS = "<extra_id_5>"  # If using only questions
-        SEPARATOR_OUTPUT_QUESTION_ANSWER = "<extra_id_7>"
-        SEPARATOR_OUTPUT_PAIRS = "<extra_id_9>"
-        PREDICATE_GENERIC_MARKER = "<extra_id_10>" 
-        PREDICATE_VERB_MARKER = "<extra_id_11>" 
-        PREDICATE_NOMINALIZATION_MARKER = "<extra_id_12>" 
+        special_tokens_constants.SEPARATOR_INPUT_QUESTION_PREDICATE = "<extra_id_1>"
+        special_tokens_constants.SEPARATOR_OUTPUT_ANSWERS = "<extra_id_3>"
+        special_tokens_constants.SEPARATOR_OUTPUT_QUESTIONS = "<extra_id_5>"  # If using only questions
+        special_tokens_constants.SEPARATOR_OUTPUT_QUESTION_ANSWER = "<extra_id_7>"
+        special_tokens_constants.SEPARATOR_OUTPUT_PAIRS = "<extra_id_9>"
+        special_tokens_constants.PREDICATE_GENERIC_MARKER = "<extra_id_10>" 
+        special_tokens_constants.PREDICATE_VERB_MARKER = "<extra_id_11>" 
+        special_tokens_constants.PREDICATE_NOMINALIZATION_MARKER = "<extra_id_12>" 
 
     else:
-        SEPARATOR_INPUT_QUESTION_PREDICATE = "<QUESTION_PREDICATE_SEP>"
-        SEPARATOR_OUTPUT_ANSWERS = "<ANSWERS_SEP>"
-        SEPARATOR_OUTPUT_QUESTIONS = "<QUESTION_SEP>"  # If using only questions
-        SEPARATOR_OUTPUT_QUESTION_ANSWER = "<QUESTION_ANSWER_SEP>"
-        SEPARATOR_OUTPUT_PAIRS = "<QA_PAIRS_SEP>"
-        PREDICATE_GENERIC_MARKER = "<PREDICATE_MARKER>" 
-        PREDICATE_VERB_MARKER = "<VERBAL_PREDICATE_MARKER>" 
-        PREDICATE_NOMINALIZATION_MARKER = "<NOMINALIZATION_PREDICATE_MARKER>" 
-        all_special_tokens = [
-            SEPARATOR_INPUT_QUESTION_PREDICATE,
-            SEPARATOR_OUTPUT_ANSWERS,
-            SEPARATOR_OUTPUT_QUESTIONS,
-            SEPARATOR_OUTPUT_QUESTION_ANSWER,
-            SEPARATOR_OUTPUT_PAIRS,
-            PREDICATE_GENERIC_MARKER, 
-            PREDICATE_VERB_MARKER,
-            PREDICATE_NOMINALIZATION_MARKER
-        ]
+        special_tokens_constants.SEPARATOR_INPUT_QUESTION_PREDICATE = "<QUESTION_PREDICATE_SEP>"
+        special_tokens_constants.SEPARATOR_OUTPUT_ANSWERS = "<ANSWERS_SEP>"
+        special_tokens_constants.SEPARATOR_OUTPUT_QUESTIONS = "<QUESTION_SEP>"  # If using only questions
+        special_tokens_constants.SEPARATOR_OUTPUT_QUESTION_ANSWER = "<QUESTION_ANSWER_SEP>"
+        special_tokens_constants.SEPARATOR_OUTPUT_PAIRS = "<QA_PAIRS_SEP>"
+        special_tokens_constants.PREDICATE_GENERIC_MARKER = "<PREDICATE_MARKER>" 
+        special_tokens_constants.PREDICATE_VERB_MARKER = "<VERBAL_PREDICATE_MARKER>" 
+        special_tokens_constants.PREDICATE_NOMINALIZATION_MARKER = "<NOMINALIZATION_PREDICATE_MARKER>" 
+        all_special_tokens = list(vars(special_tokens_constants).values())
     unnormalized_tokens = ["``"]
+
 
     # Load pretrained model and tokenizer
     #
@@ -537,6 +531,10 @@ def main():
         additional_special_tokens=all_special_tokens
     )
     tokenizer.add_tokens(unnormalized_tokens)
+    # add to special_tokens_constants other special tokens from tokenizer
+    special_tokens_constants.eos_token = tokenizer.eos_token
+    special_tokens_constants.bos_token = tokenizer.bos_token
+    special_tokens_constants.pad_token = tokenizer.pad_token
 
     optional_params_to_pass_to_model_config = ("top_k", "top_p", "num_beam_groups")
     # optionally: specify here decoding method params, e.g. "top_k", "top_p", 
@@ -597,16 +595,7 @@ def main():
             f"`{model.__class__.__name__}`. This will lead to loss being calculated twice and will take up more memory"
         )
 
-    preprocessor = Preprocessor(data_args,
-                SEPARATOR_INPUT_QUESTION_PREDICATE,
-                 SEPARATOR_OUTPUT_ANSWERS,
-                 SEPARATOR_OUTPUT_QUESTIONS,
-                 SEPARATOR_OUTPUT_QUESTION_ANSWER,
-                 SEPARATOR_OUTPUT_PAIRS,
-                 PREDICATE_GENERIC_MARKER, 
-                 PREDICATE_VERB_MARKER,
-                 PREDICATE_NOMINALIZATION_MARKER,
-                 tokenizer.eos_token)
+    preprocessor = Preprocessor(data_args, special_tokens_constants)
 
     # Preprocssing for train and eval - preparing both input sequence and expected output sequence ("labels")
     def preprocess_function(examples):
@@ -924,16 +913,7 @@ def main():
         trainer.save_metrics("eval", metrics)
 
     from strings_to_objects_parser import StringsToObjectsParser
-    strings_to_objects_parser = StringsToObjectsParser(
-        SEPARATOR_INPUT_QUESTION_PREDICATE,
-        SEPARATOR_OUTPUT_ANSWERS,
-        SEPARATOR_OUTPUT_QUESTIONS,
-        SEPARATOR_OUTPUT_QUESTION_ANSWER,
-        SEPARATOR_OUTPUT_PAIRS,
-        tokenizer.bos_token,
-        tokenizer.eos_token,
-        tokenizer.pad_token
-    )
+    strings_to_objects_parser = StringsToObjectsParser(special_tokens_constants)
 
     if "output_file" in training_args.__dict__:
         output_prediction_file = training_args.output_file

@@ -3,7 +3,6 @@ import json
 from argparse import Namespace
 from pathlib import Path
 from transformers import Text2TextGenerationPipeline, AutoModelForSeq2SeqLM, AutoTokenizer
-import preprocessing
 
 def get_markers_for_model(is_t5_model: bool) -> Namespace:
     special_tokens_constants = Namespace() 

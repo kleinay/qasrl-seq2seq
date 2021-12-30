@@ -54,6 +54,7 @@ from transformers.utils.versions import require_version
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 from preprocessing import Preprocessor
+from pipeline import get_markers_for_model
 from qasrl_gs.scripts.common import QuestionAnswer
 from qasrl_gs.scripts.evaluate import evaluate
 from utils import setup_wandb, replaceKeys, str2num
@@ -485,28 +486,9 @@ def main():
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
     # Special tokens used in modelling the sequences
+    special_tokens_constants = get_markers_for_model(is_t5_model)
     all_special_tokens = None
-    special_tokens_constants = Namespace() 
-    if is_t5_model:
-        # T5 model have 100 special tokens by default
-        special_tokens_constants.SEPARATOR_INPUT_QUESTION_PREDICATE = "<extra_id_1>"
-        special_tokens_constants.SEPARATOR_OUTPUT_ANSWERS = "<extra_id_3>"
-        special_tokens_constants.SEPARATOR_OUTPUT_QUESTIONS = "<extra_id_5>"  # If using only questions
-        special_tokens_constants.SEPARATOR_OUTPUT_QUESTION_ANSWER = "<extra_id_7>"
-        special_tokens_constants.SEPARATOR_OUTPUT_PAIRS = "<extra_id_9>"
-        special_tokens_constants.PREDICATE_GENERIC_MARKER = "<extra_id_10>" 
-        special_tokens_constants.PREDICATE_VERB_MARKER = "<extra_id_11>" 
-        special_tokens_constants.PREDICATE_NOMINALIZATION_MARKER = "<extra_id_12>" 
-
-    else:
-        special_tokens_constants.SEPARATOR_INPUT_QUESTION_PREDICATE = "<QUESTION_PREDICATE_SEP>"
-        special_tokens_constants.SEPARATOR_OUTPUT_ANSWERS = "<ANSWERS_SEP>"
-        special_tokens_constants.SEPARATOR_OUTPUT_QUESTIONS = "<QUESTION_SEP>"  # If using only questions
-        special_tokens_constants.SEPARATOR_OUTPUT_QUESTION_ANSWER = "<QUESTION_ANSWER_SEP>"
-        special_tokens_constants.SEPARATOR_OUTPUT_PAIRS = "<QA_PAIRS_SEP>"
-        special_tokens_constants.PREDICATE_GENERIC_MARKER = "<PREDICATE_MARKER>" 
-        special_tokens_constants.PREDICATE_VERB_MARKER = "<VERBAL_PREDICATE_MARKER>" 
-        special_tokens_constants.PREDICATE_NOMINALIZATION_MARKER = "<NOMINALIZATION_PREDICATE_MARKER>" 
+    if not is_t5_model:
         all_special_tokens = list(vars(special_tokens_constants).values())
     unnormalized_tokens = ["``"]
 
@@ -831,12 +813,12 @@ def main():
         em_results = exact_match_metric.compute(predictions=decoded_preds, references=decoded_labels)
         result["exact_match"] = em_results['accuracy']
         # Compute element exact match (QA level)
-        eem_results = element_exact_match_metric.compute(predictions=decoded_preds, references=decoded_labels, separator=SEPARATOR_OUTPUT_PAIRS)
+        eem_results = element_exact_match_metric.compute(predictions=decoded_preds, references=decoded_labels, separator=special_tokens_constants.separator_output_pairs)
         result["QA_exact_match_P"] = eem_results['precision']
         result["QA_exact_match_R"] = eem_results['recall']
         result["QA_exact_match_F1"] = eem_results['f1']
         wh_a_em_results = wh_answer_exact_match_metric.compute(predictions=decoded_preds, references=decoded_labels, 
-                                                               qa_pairs_sep=SEPARATOR_OUTPUT_PAIRS, qa_sep=SEPARATOR_OUTPUT_QUESTION_ANSWER)
+                                                               qa_pairs_sep=special_tokens_constants.separator_output_pairs, qa_sep=special_tokens_constants.separator_output_question_answer)
         result["Wh_and_answer_EM_P"] = wh_a_em_results['precision']
         result["Wh_and_answer_EM_R"] = wh_a_em_results['recall']
         result["Wh_and_answer_EM_F1"] = wh_a_em_results['f1']

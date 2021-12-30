@@ -1,18 +1,8 @@
 from builtins import ValueError
 from dataclasses import dataclass
 from typing import List, Literal
-
+from argparse import Namespace
 import pandas as pd
-
-# @dataclass
-# class Separators:
-#     separator_input_question_predicate: str
-#     separator_output_answers: str
-#     separator_output_questions: str
-#     separator_output_question_answer: str
-#     separator_output_pairs: str
-#     eos_token: str
-
 
 class Preprocessor:
     def __init__(self,
@@ -73,17 +63,16 @@ class Preprocessor:
         row = x.iloc[0]
         if self.data_args.source_prefix is None:
             return ''
-        if not self.data_args.source_prefix.startswith("<"):  # Regular prefix - not dependent on input row x
-            return self.data_args.source_prefix
-        if self.data_args.source_prefix == "<predicate-type>":
+        if "<predicate-type>" in self.data_args.source_prefix:
             if "predicate_type" not in row:
-                raise ValueError("source_prefix is '<predicate-type>' but input row has no 'predicate_type' attribute.")
-            else:
-                pred_type = x["predicate_type"]
+                raise ValueError("source_prefix includes '<predicate-type>' but input row has no 'predicate_type' attribute.")
+            pred_type = x["predicate_type"]
+            if self.data_args.source_prefix == "<predicate-type>": # backwrad compatibility - "<predicate-type>" alone was a sign for a longer prefix 
                 return f"Generate QAs for {pred_type} QASRL: "
-        
-        
-        raise ValueError(f"source_prefix '{self.data_args.source_prefix}' starts with '<' but does not correspond to a valid prefixing method. ")
+            else:
+                return self.data_args.source_prefix.replace("<predicate-type>", pred_type)
+        else:
+            return self.data_args.source_prefix
 
     """
     Input Sequence preprocessing:
@@ -112,12 +101,12 @@ class Preprocessor:
         # prepare predicate marker
         #  In case we want a generic marker for all predicate types: """
         if self.data_args.predicate_marker_type == "generic":
-            predicate_marker = self.special_tokens.marker_generic_predicate    
+            predicate_marker = self.special_tokens.predicate_generic_marker    
         #  In case we want special marker for each predicate type: """
         elif self.data_args.predicate_marker_type == "pred_type" \
             and "predicate_type" in row:
-            predicate_marker = {"verbal": self.special_tokens.marker_verbal_predicate, 
-                                "nominal": self.special_tokens.marker_nominalization_predicate
+            predicate_marker = {"verbal": self.special_tokens.predicate_verb_marker , 
+                                "nominal": self.special_tokens.predicate_nominalization_marker 
                                 }[row["predicate_type"]]
         else:
             raise ValueError(f"invalid value for `data_args.predicate_marker_type`: {self.data_args.predicate_marker_type}")
@@ -132,7 +121,7 @@ class Preprocessor:
         seq = self._append_verb_form(seq, row)
         
         # append predicate_type (if not captured by in predicate_marker)
-        # if "predicate_type" in row and predicate_marker == self.special_tokens.marker_generic_predicate:
+        # if "predicate_type" in row and predicate_marker == self.special_tokens.predicate_generic_marker :
         #     seq = f'{row["predicate_type"]} | {seq}' 
         return seq
     

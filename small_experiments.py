@@ -12,7 +12,7 @@ from notebook import *
 #                     train_epochs=epochs,
 #                     batch_size=12,
 #                     fp16=True,
-#                     source_prefix="<predicate-type>",
+#                     source_prefix="Generate QAs for <predicate_type> QASRL: ",
 #                     preprocess_input_func="input_predicate_marker",
 #                     preprocess_output_func="all_random_order",
 #                     append_verb_form=True,
@@ -28,15 +28,15 @@ from notebook import *
 #                     )
 
 # #%%  best joint model so far
-for model_type in ["t5", "bart"]:
-    epochs=30
+for model_type in ["t5"]:
+    epochs=5
     wandb_run_name=f"{now()}_{epochs}ep_{model_type}_joint_qanom_best"
     full_experiment(model_type=model_type,
                         train_dataset="joint_qanom",
                         test_dataset="qanom",
                         train_epochs=epochs,
                         batch_size=10,
-                        source_prefix="<predicate-type>",
+                        source_prefix="Generate QAs for <predicate_type> QASRL: ",
                         preprocess_input_func="input_predicate_marker",
                         use_bilateral_predicate_marker=True,
                         overwrite_output_dir=True,
@@ -46,6 +46,24 @@ for model_type in ["t5", "bart"]:
                         dir_switch="joint_qanom_balanced",
                         qanom_joint_factor=14,
                         description="""pred-type prefix, bilateral marker, beams=3, qanom_factor=14""",
+                        )
+    
+    wandb_run_name=f"{now()}_{epochs}ep_{model_type}_joint_qanom_short-prefix"
+    full_experiment(model_type=model_type,
+                        train_dataset="joint_qanom",
+                        test_dataset="qanom",
+                        train_epochs=epochs,
+                        batch_size=10,
+                        source_prefix="ask <predicate_type>: ",
+                        preprocess_input_func="input_predicate_marker",
+                        use_bilateral_predicate_marker=True,
+                        overwrite_output_dir=True,
+                        num_beams=3,
+                        logging_steps=500,
+                        wandb_run_name=wandb_run_name,
+                        dir_switch="joint_qanom_balanced",
+                        qanom_joint_factor=14,
+                        description="""shorter pred-type prefix, bilateral marker, beams=3, qanom_factor=14""",
                         )
     
 
@@ -61,7 +79,7 @@ for model_type in ["t5", "bart"]:
 #                     test_dataset="qanom",
 #                     train_epochs=epochs,
 #                     batch_size=12,
-#                     source_prefix="<predicate-type>",
+#                     source_prefix="Generate QAs for <predicate_type> QASRL: ",
 #                     preprocess_input_func="input_predicate_marker",
 #                     overwrite_output_dir=True,
 #                     wandb_run_name=wandb_run_name,
@@ -101,7 +119,7 @@ for model_type in ["t5", "bart"]:
 #                     test_dataset="qanom",
 #                     train_epochs=epochs,
 #                     batch_size=12,
-#                     source_prefix="<predicate-type>",
+#                     source_prefix="Generate QAs for <predicate_type> QASRL: ",
 #                     preprocess_input_func="input_predicate_marker",
 #                     overwrite_output_dir=True,
 #                     wandb_run_name=wandb_run_name,
@@ -116,7 +134,7 @@ for model_type in ["t5", "bart"]:
 #                     test_dataset="qanom",
 #                     train_epochs=epochs,
 #                     batch_size=12,
-#                     source_prefix="<predicate-type>",
+#                     source_prefix="Generate QAs for <predicate_type> QASRL: ",
 #                     preprocess_input_func="input_predicate_marker",
 #                     overwrite_output_dir=True,
 #                     wandb_run_name=wandb_run_name,
@@ -183,7 +201,7 @@ epochs = 30
 #                     test_dataset="qasrl",
 #                     train_epochs=epochs,
 #                     wandb_run_name=wandb_run_name,
-#                     source_prefix="<predicate-type>",
+#                     source_prefix="Generate QAs for <predicate_type> QASRL: ",
 #                     dir_switch="qasrl-joint",
 #                     preprocess_input_func="input_predicate_marker",
 #                     preprocess_output_func="all_by_answer_ordering",
@@ -212,7 +230,7 @@ epochs = 30
 #                     test_dataset="qanom",
 #                     train_epochs=epochs,
 #                     wandb_run_name=wandb_run_name,
-#                     source_prefix="<predicate-type>",
+#                     source_prefix="Generate QAs for <predicate_type> QASRL: ",
 #                     dir_switch="joint-qanom-pred-marker",
 #                     preprocess_input_func="input_predicate_marker",
 #                     description="After commenting out pred-type-dependent predicate marker, staying only with marker_generic_predicate."

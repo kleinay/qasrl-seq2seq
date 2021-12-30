@@ -1,6 +1,7 @@
 # To add a new cell, type '# %%'
 # To add a new markdown cell, type '# %% [markdown]'
 # %%
+from argparse import Namespace
 from shutil import Error
 from typing import Literal, Any, Dict, List, Optional
 from IPython import get_ipython
@@ -58,13 +59,12 @@ def get_model_dir(model_type: str, train_task: str = None, directory_switch: str
 
 def set_model_params(model_type: str, model_dir: str = None, load_pretrained = True, source_prefix = 'summarize: ', **kwargs) -> List[str]:
     """
-    source_prefix string is an actual generic prompt; for more controlled prompt behaiour, specify behaviour name enclosed by <>,
-    For example, source_prefix="<predicate-type>" makes the prompt dependent on predicate type.
-    These should be processed differently by the `preprocess_function__questions_answers` function in `run_summarization.py`.
+    source_prefix string is an actual generic prefix; 
+    in the source_prefix, the special "<predicate-type>" token translates into the `predicate_type` ("nominal" or "verbal").`.
     """
     sys.argv += ['--output_dir', model_dir]
     
-    if model_type in ("t5", "t5-large"):
+    if "t5" in model_type.lower():
         model_name_to_load = "t5-small" if model_type=="t5" else model_type
         sys.argv += ['--model_name_or_path', model_name_to_load if load_pretrained else model_dir,
                      '--model_type', 't5',
@@ -80,7 +80,7 @@ def set_model_params(model_type: str, model_dir: str = None, load_pretrained = T
                      ]
         os.environ["BART_MODEL_DIR"] = model_dir      
     else:
-        raise ValueError(f"model_type doesn't exist ; model_type {model_type}")
+        raise ValueError(f"model_type '{model_type}' is not supported!")
     
 # # Train, predict and evaluate ***********************
 
@@ -105,10 +105,13 @@ def set_model_params(model_type: str, model_dir: str = None, load_pretrained = T
 def get_default_kwargs() -> Dict[str, Any]:
     default_boolean_args = dict(overwrite_output_dir=True,
                                 predict_with_generate=True,
-                                debug_mode=False,)
+                                debug_mode=False,
+                                append_verb_form=True,
+                                use_bilateral_predicate_marker=True)
     default_non_boolean_args = dict(per_device_train_batch_size=8,
                                     per_device_eval_batch_size=8,
-                                    logging_steps=200)  
+                                    logging_steps=200,
+                                    predicate_marker_type="generic")  
     defaults = dict(default_boolean_args, **default_non_boolean_args)
     return defaults
   
@@ -311,7 +314,7 @@ def print_invalid_dist(model_type):
     print(df["Error-type"].value_counts(), "\n")
     print(df["Error-type"].value_counts() / len(df))
 
-def full_experiment(model_type: Literal["bart", "t5", "t5-large"] = "bart", 
+def full_experiment(model_type: str, # e.g. "bart", "t5", "t5-large", "iarfmoose/t5-base-question-generator", 
                     train_dataset: Literal["qanom", "qasrl", "qadiscourse"] = "qanom", 
                     test_dataset: Literal["qanom", "qasrl", "qadiscourse"] = "qanom",
                     dir_switch: str = None,
@@ -439,11 +442,7 @@ def load_and_predict(saved_model_path: str, test_file,
     return run
 
 
-def load_trained_model(name_or_path):
-    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
-    tokenizer = AutoTokenizer.from_pretrained(name_or_path)
-    model = AutoModelForSeq2SeqLM.from_pretrained(name_or_path)   
-    return model, tokenizer
+from pipeline import load_trained_model
     
 def upload_trained_model(saved_model_path, repo_name):
     model, tokenizer = load_trained_model(saved_model_path)
@@ -454,6 +453,7 @@ def upload_trained_model(saved_model_path, repo_name):
     upload_file(f"{saved_model_path}/experiment_kwargs.json", 
                 path_in_repo="preprocessing_kwargs.json", 
                 repo_id=f"kleinay/{repo_name}")
+    print(f"Uploaded to https://huggingface.co/kleinay/{repo_name}")
     
 
 if __name__ == "__main__":

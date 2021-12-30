@@ -79,7 +79,11 @@ class QASRL_Pipeline(Text2TextGenerationPipeline):
         if isinstance(inputs, str):
             processed_inputs = self._preprocess_string(inputs, predicate_marker, predicate_type, verb_form)
         elif hasattr(inputs, "__iter__"):
-            processed_inputs = [self._preprocess_string(s, predicate_marker, predicate_type, verb_form) for s in inputs]
+            if verb_form is None or isinstance(verb_form, str):
+                processed_inputs = [self._preprocess_string(s, predicate_marker, predicate_type, verb_form) for s in inputs]
+            # verb form can be a same-size iterable as inputs
+            else:
+                processed_inputs = [self._preprocess_string(s, predicate_marker, predicate_type, vform) for s, vform in zip(inputs, verb_form)]         
         else:
             raise ValueError("inputs must be str or Iterable[str]")
         # Now pass to super.preprocess for tokenization

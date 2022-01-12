@@ -667,8 +667,8 @@ def main():
         qasrl_id_keys = ({'qasrl_id','sent_id','sentence_id', 'SentenceId'} & examples.keys())
         qasrl_id_key = qasrl_id_keys.pop() if qasrl_id_keys else None
        
-        examples2 = replaceKeys(examples, {text_column: "sentence", predicate_index_key: "predicate_idx", predicate_key: "predicate", qasrl_id_key: "qasrl_id"}, inplace=False) 
-        df = pd.DataFrame(examples2)
+        examples_unified_labels = replaceKeys(examples, {text_column: "sentence", predicate_index_key: "predicate_idx", predicate_key: "predicate", qasrl_id_key: "qasrl_id"}, inplace=False) 
+        df = pd.DataFrame(examples_unified_labels.data)
         
         for required_key in ("verb_form", "predicate_type"):
             if required_key not in df.columns:
@@ -750,8 +750,7 @@ def main():
         
         # If predict_dataset includes gold standard reference, use the regular preprocessing which also prepares `labels`;
         # Otherwise, do inference without labels 
-        # if "question" in predict_dataset.column_names and "answers" in predict_dataset.column_names:
-        if False:   # for debug
+        if "question" in predict_dataset.column_names and "answers" in predict_dataset.column_names:
             do_inference_without_labels = False
             preprocessing_func_for_test = preprocess_function
         else:
@@ -944,7 +943,7 @@ def main():
                     logger.info(f"* Gold Output:\t\t {tokenizer.decode(predict_dataset[i]['labels']).rstrip('<pad>')}")
                 logger.info(f"* Predicted Output:\t {predictions[i].rstrip('<pad>')}")
                 
-                #TODO remove non-QASRL segments of the output sequences 
+                #TODO future: remove non-QASRL segments of the output sequences 
                 #  e.g. depends on data_args.learn_predicate_type
 
                 predicted_QAs: List[QuestionAnswer]; invalid_pred_seqs: List[str] 

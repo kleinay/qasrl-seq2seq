@@ -66,9 +66,9 @@ class Preprocessor:
         if self.data_args.source_prefix is None:
             return ''
         if "<predicate-type>" in self.data_args.source_prefix:
-            if "predicate_type" not in row:
+            if "predicate_type" not in row or row["predicate_type"] is None:
                 raise ValueError("source_prefix includes '<predicate-type>' but input row has no 'predicate_type' attribute.")
-            pred_type = x["predicate_type"]
+            pred_type = row["predicate_type"] 
             if self.data_args.source_prefix == "<predicate-type>": # backwrad compatibility - "<predicate-type>" alone was a sign for a longer prefix 
                 return f"Generate QAs for {pred_type} QASRL: "
             else:

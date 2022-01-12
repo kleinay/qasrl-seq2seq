@@ -21,11 +21,11 @@ def reshape_qasrl_into_qanom(df: pd.DataFrame, sentences_df: Optional[pd.DataFra
 
 def replaceKeys(orig_dict, oldKeys2NewKeys, inplace=True):
     """ replace keys with new keys using oldKeys2NewKeys mapping. """
-    target_dict = orig_dict if inplace else {}
+    target_dict = orig_dict if inplace else orig_dict.copy()
     for oldKey, newKey in oldKeys2NewKeys.items():
-        if oldKey in orig_dict:
-            target_dict[newKey] = orig_dict.get(oldKey)
-            if inplace and oldKey != newKey: orig_dict.pop(oldKey)
+        if oldKey in target_dict:
+            target_dict[newKey] = target_dict.get(oldKey)
+            if oldKey != newKey: target_dict.pop(oldKey)
     return target_dict
 
 def str2num(s: str) -> Union[int, float]:

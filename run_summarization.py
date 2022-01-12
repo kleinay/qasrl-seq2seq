@@ -750,7 +750,8 @@ def main():
         
         # If predict_dataset includes gold standard reference, use the regular preprocessing which also prepares `labels`;
         # Otherwise, do inference without labels 
-        if "question" in predict_dataset.column_names and "answers" in predict_dataset.column_names:
+        # if "question" in predict_dataset.column_names and "answers" in predict_dataset.column_names:
+        if False:   # for debug
             do_inference_without_labels = False
             preprocessing_func_for_test = preprocess_function
         else:
@@ -782,8 +783,8 @@ def main():
     wh_answer_exact_match_metric = load_metric("metrics/wh_qasrl_match.py")
 
     def postprocess_text(preds, labels):
-        preds = [pred.lstrip("</s>").rstrip("<pad>").rstrip("</s>").strip() for pred in preds]
-        labels = [label.lstrip("</s>").rstrip("<pad>").rstrip("</s>").strip() for label in labels]
+        preds = [pred.lstrip("<s>").strip("<pad>").rstrip("</s>").strip() for pred in preds]
+        labels = [label.lstrip("<s>").strip("<pad>").rstrip("</s>").strip() for label in labels]
 
         # rougeLSum expects newline after each sentence
         preds = ["\n".join(nltk.sent_tokenize(pred)) for pred in preds]

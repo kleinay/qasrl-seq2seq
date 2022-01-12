@@ -42,7 +42,7 @@ def load_trained_model(name_or_path):
     if kwargs_filename:
         preprocessing_kwargs = json.load(open(kwargs_filename)) 
         # integrate into model.config (for decoding args, e.g. "num_beams"), and save also as standalone object for preprocessing
-        model.config.preprocessing_kwargs = Namespace(**preprocessing_kwargs)
+        model.config.preprocessing_kwargs = preprocessing_kwargs
         model.config.update(preprocessing_kwargs)
     return model, tokenizer
 
@@ -51,10 +51,11 @@ class QASRL_Pipeline(Text2TextGenerationPipeline):
     def __init__(self, model_repo: str, **kwargs):
         model, tokenizer = load_trained_model(model_repo)
         super().__init__(model, tokenizer, framework="pt")
+        self.model_repo_name = model_repo
         self.is_t5_model = "t5" in model.config.model_type
         self.special_tokens = get_markers_for_model(self.is_t5_model)
         # self.preprocessor = preprocessing.Preprocessor(model.config.preprocessing_kwargs, self.special_tokens)
-        self.data_args = model.config.preprocessing_kwargs 
+        self.data_args = Namespace(**model.config.preprocessing_kwargs)
         # backward compatibility - default keyword values implemeted in `run_summarization`, thus not saved in `preprocessing_kwargs`
         if "predicate_marker_type" not in vars(self.data_args):
             self.data_args.predicate_marker_type = "generic"
@@ -172,8 +173,10 @@ class QASRL_Pipeline(Text2TextGenerationPipeline):
     
     
 if __name__ == "__main__":
-    pipe = QASRL_Pipeline("kleinay/qanom-seq2seq-model-baseline")
-    res1 = pipe("The student was interested in Luke 's <predicate> research about see animals .", verb_form="research", predicate_type="nominal")
+    # pipe = QASRL_Pipeline("kleinay/qanom-seq2seq-model-baseline")
+    # pipe = QASRL_Pipeline("trained_models/t5_30ep-on-joint-qanom_seq-prefix_23.11.21")
+    pipe = QASRL_Pipeline("trained_models/t5_10ep-joint-qanom_15.12.21")
+    res1 = pipe("The student was interested in Luke 's <predicate> research about sea animals .", verb_form="research", predicate_type="nominal")
     res2 = pipe(["The doctor was interested in Luke 's <predicate> treatment .",
                  "The Veterinary student was interested in Luke 's <predicate> treatment of sea animals ."], verb_form="treat", predicate_type="nominal", num_beams=10)
     res3 = pipe("A number of professions have <predicate> developed that specialize in the treatment of mental disorders .", verb_form="develop", predicate_type="verbal")

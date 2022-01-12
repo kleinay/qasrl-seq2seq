@@ -343,14 +343,15 @@ def main():
     transformers.utils.logging.enable_explicit_format()
     
     run = wandb.run or setup_wandb("wandb" in training_args.report_to, model_args.wandb_run_name)
+    wandb.config.update(data_args.__dict__, allow_val_change=True)
 
     # Log on each process the small summary:
     logger.warning(
         f"Process rank: {training_args.local_rank}, device: {training_args.device}, n_gpu: {training_args.n_gpu}"
         + f" distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
     )
-    logger.info(f"Training/evaluation parameters {training_args}")
-    logger.info(f"Model parameters {model_args}")
+    # logger.info(f"Training/evaluation parameters {training_args}")
+    # logger.info(f"Model parameters {model_args}")
 
     if model_args.model_type not in ["t5", "bart"]:
         raise ValueError(f"Invalid model_type received ; model_type {model_args.model_type}")
@@ -526,6 +527,7 @@ def main():
                         if key in optional_params_to_pass_to_model_config 
                            and value is not None} 
     config.update(kwargs_for_model_config)       
+    wandb.config["model_name_or_path"] = model_args.model_name_or_path 
     
     model = AutoModelForSeq2SeqLM.from_pretrained(
         model_args.model_name_or_path,
@@ -748,7 +750,7 @@ def main():
         
         # If predict_dataset includes gold standard reference, use the regular preprocessing which also prepares `labels`;
         # Otherwise, do inference without labels 
-        if "question" in predict_dataset and "answers" in predict_dataset:
+        if "question" in predict_dataset.column_names and "answers" in predict_dataset.column_names:
             do_inference_without_labels = False
             preprocessing_func_for_test = preprocess_function
         else:
@@ -842,8 +844,8 @@ def main():
             predict_dataset = predict_dataset.shuffle(seed=42).select(range(5))
 
     # Modify training_args before initializing Trainer, to allow evaluation during training
-    training_args.evaluation_strategy = transformers.trainer_utils.IntervalStrategy.STEPS # 'NO', 'EPOCH' or 'STEPS'
-    training_args.eval_steps = 500       
+    # training_args.evaluation_strategy = transformers.trainer_utils.IntervalStrategy.STEPS # 'NO', 'EPOCH' or 'STEPS'
+    # training_args.eval_steps = 500       
 
     # Initialize our Trainer
     trainer = Seq2SeqTrainer(
@@ -897,6 +899,7 @@ def main():
     from strings_to_objects_parser import StringsToObjectsParser
     strings_to_objects_parser = StringsToObjectsParser(special_tokens_constants)
 
+    # Inference (Prediction on test)
     if "output_file" in training_args.__dict__:
         output_prediction_file = training_args.output_file
     else:

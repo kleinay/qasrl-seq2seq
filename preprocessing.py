@@ -9,6 +9,8 @@ class Preprocessor:
                  data_args,
                  special_tokens
                  ):
+        if isinstance(data_args, dict):
+            data_args = Namespace(**data_args)
         self.data_args = data_args
         self.special_tokens = special_tokens
         

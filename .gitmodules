@@ -4,3 +4,6 @@
 [submodule "QANom"]
 	path = QANom
 	url = git@github.com:kleinay/QANom.git
+[submodule "seq2seq_constrained_decoding"]
+	path = seq2seq_constrained_decoding
+	url = https://github.com/kleinay/seq2seq_constrained_decoding

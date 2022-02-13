@@ -6,6 +6,8 @@ from datasets import Dataset
 from spacy.matcher.phrasematcher import PhraseMatcher
 
 from qasrl_gs.scripts.common import Role, Question, QuestionAnswer, STR_FORMAT_ANSWER_SEPARATOR
+from seq2seq_constrained_decoding.constrained_decoding.qasrl_constrained_decoding import get_qasrl_question_dfa
+from seq2seq_constrained_decoding.constrained_decoding.dfa import DFA
 
 QASRL_UNUSED_SLOT = "_"
 
@@ -20,9 +22,14 @@ class StringsToObjectsParser:
     """
 
     def __init__(self,
-                 special_tokens
+                 special_tokens,
+                 tokenizer
                  ):
         self.special_tokens = special_tokens
+        self.qasrl_q_dfa: DFA = get_qasrl_question_dfa(constrain_verb=False)
+        # Define qasrl_q_dfa for finding verbs within the question
+        self.qasrl_q_dfa = self.qasrl_q_dfa.adjust_for_tokenizer(tokenizer)
+        self.qasrl_q_dfa.accept_states = [3]    # verb slot
 
     def to_qasrl_gs_csv_format(self, predict_dataset: Dataset, predictions: List[str]) -> Tuple[List[QuestionAnswer], List[str]]:
         qasrl_predictions: List[QuestionAnswer] = []
@@ -45,6 +52,10 @@ class StringsToObjectsParser:
         for pair_str in pairs_strs:
             try:
                 question_str, arguments_strs = pair_str.split(self.special_tokens.separator_output_question_answer)
+                # Evaluation Modification: Instead of relying on spacy to find the verb, take the verb slot (4th) from question_str, which is supposed to be e.g. 'who _ _ researched something _ _?'
+                #   since every slot can be multiple word (e.g. "how much", "should not"), we will use the slot-based qasrl automaton for identifying the verb slot. 
+                # clean_question_str, verb_form = self._clean_question_and_verb(question_str)
+                
                 clean_question_str = self._clean_question(question_str)
                 verb_form = find_verb_in_question(clean_question_str)
                 arguments = arguments_strs.split(self.special_tokens.separator_output_answers)
@@ -64,6 +75,20 @@ class StringsToObjectsParser:
 
         return questions_answers, skipped_pairs_strs
 
+    def _clean_question_and_verb(self, question_str: str) -> Tuple[str, str]:
+        clean_question = self._clean_question(question_str)
+        verb = self._find_verb_by_slot_dfa(question_str)
+        return clean_question, verb
+
+    def _find_verb_by_slot_dfa(self, question_str: str) -> str:
+        words_of_q = question_str.split(" ")
+        for i in range(len(words_of_q)):
+            automaton_input = ' '.join(words_of_q[:i])
+            if self.qasrl_q_dfa(automaton_input)[2]:
+                return words_of_q[i]
+        # verb not found
+        raise S2SOutputError(f"No verb found in question. Predicted question: '{question_str}'", error_type="No verb in question") 
+        
     def _clean_question(self, question_str: str) -> str:
         return self._clean_generated_string(question_str.replace(f"{QASRL_UNUSED_SLOT} ","").replace(f"{QASRL_UNUSED_SLOT}?", "?").replace(f" ?", "?"))
 

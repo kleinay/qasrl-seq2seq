@@ -57,7 +57,7 @@ from preprocessing import Preprocessor
 from pipeline import get_markers_for_model
 from qasrl_gs.scripts.common import QuestionAnswer
 from qasrl_gs.scripts.evaluate import evaluate
-from utils import setup_wandb, replaceKeys, str2num
+from utils import setup_wandb, replaceKeys, str2num, without_prefix, without_suffix
 
 check_min_version("4.10.0.dev0")
 
@@ -133,6 +133,10 @@ class ModelArguments:
     num_beam_groups: Optional[int] = field(
         default=None,
         metadata={"help": "Number of groups to divide `num_beams` into in order to ensure diversity among different groups of beams."},
+    )
+    constrain_generation: bool = field(
+        default=False,
+        metadata={"help": "Whether to apply constrained decoding during prediction."},
     )
     
 
@@ -328,6 +332,9 @@ def main():
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+        # fix `do_eval` mistake
+        training_args.do_eval = "--do_eval" in sys.argv
+
 
     # Setup logging
     logging.basicConfig(
@@ -527,7 +534,7 @@ def main():
                         if key in optional_params_to_pass_to_model_config 
                            and value is not None} 
     config.update(kwargs_for_model_config)       
-    wandb.config["model_name_or_path"] = model_args.model_name_or_path 
+    wandb.config.update({"model_name_or_path": model_args.model_name_or_path}, allow_val_change=True) 
     
     model = AutoModelForSeq2SeqLM.from_pretrained(
         model_args.model_name_or_path,
@@ -717,7 +724,7 @@ def main():
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
                 load_from_cache_file=not data_args.overwrite_cache,
-                desc="Running tokenizer on train dataset",
+                desc="Preprocessing train dataset",
             )
         # log a sample of training instances 
         data_example = train_dataset[0]
@@ -730,6 +737,8 @@ def main():
         eval_dataset = raw_datasets["validation"]
         if data_args.max_eval_samples is not None:
             eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
+        if data_args.limit_eval_data is not None:
+            eval_dataset = eval_dataset.select(range(int(len(eval_dataset)*data_args.limit_eval_data)))
         with training_args.main_process_first(desc="validation dataset map pre-processing"):
             eval_dataset = eval_dataset.map(
                 preprocess_function,
@@ -737,7 +746,7 @@ def main():
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
                 load_from_cache_file=not data_args.overwrite_cache,
-                desc="Running tokenizer on validation dataset",
+                desc="Preprocessing validation dataset",
             )
 
     if training_args.do_predict:
@@ -763,7 +772,7 @@ def main():
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
                 load_from_cache_file=not data_args.overwrite_cache,
-                desc="Running tokenizer on prediction dataset",
+                desc="Preprocessing prediction dataset",
             )
 
     # Data collator
@@ -781,9 +790,16 @@ def main():
     element_exact_match_metric = load_metric("metrics/element_exact_match.py")
     wh_answer_exact_match_metric = load_metric("metrics/wh_qasrl_match.py")
 
+    def clean_output_seq(seq :str) -> str:
+        seq = seq.rstrip(tokenizer.pad_token)
+        seq = without_suffix(seq, tokenizer.eos_token.rstrip(tokenizer.pad_token))
+        if special_tokens_constants.bos_token is not None:
+            seq = without_prefix(seq, special_tokens_constants.bos_token)
+        return seq.strip()
+    
     def postprocess_text(preds, labels):
-        preds = [pred.lstrip("<s>").strip("<pad>").rstrip("</s>").strip() for pred in preds]
-        labels = [label.lstrip("<s>").strip("<pad>").rstrip("</s>").strip() for label in labels]
+        preds = [clean_output_seq(pred) for pred in preds]
+        labels = [clean_output_seq(label) for label in labels]
 
         # rougeLSum expects newline after each sentence
         preds = ["\n".join(nltk.sent_tokenize(pred)) for pred in preds]
@@ -879,6 +895,21 @@ def main():
         trainer.save_metrics("train", metrics)
         trainer.save_state()
 
+    # Prepare constrained generation
+    if model_args.constrain_generation:
+        from seq2seq_constrained_decoding.constrained_decoding.dfa import DFA
+        from seq2seq_constrained_decoding.constrained_decoding.qasrl_constrained_decoding import get_qasrl_full_sequence_dfa
+        from seq2seq_constrained_decoding.constrained_decoding.dfa_decoding import set_decoding_to_dfa_constrained
+        
+        # just naviely for testing 
+        def dfa_factory(token_ids): 
+            sentence = tokenizer.decode(token_ids, skip_special_tokens=True)
+            sentence = preprocessor.reverse_input_preprocessing(sentence)
+            return get_qasrl_full_sequence_dfa(sentence, tokenizer, special_tokens_constants)
+        # enable special dfa-constrained beam search
+        set_decoding_to_dfa_constrained(model, dfa_factory=dfa_factory, tokenizer=tokenizer)
+        data_args.num_beams = data_args.num_beams or 2 # must enable beam search to utilize DFA-constrained decoding
+        
     # Evaluation
     results = {}
     if training_args.do_eval:
@@ -897,7 +928,7 @@ def main():
         trainer.save_metrics("eval", metrics)
 
     from strings_to_objects_parser import StringsToObjectsParser
-    strings_to_objects_parser = StringsToObjectsParser(special_tokens_constants)
+    strings_to_objects_parser = StringsToObjectsParser(special_tokens_constants, tokenizer)
 
     # Inference (Prediction on test)
     if "output_file" in training_args.__dict__:
@@ -905,6 +936,7 @@ def main():
     else:
         output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.csv")
     invalid_output_prediction_file = os.path.join(training_args.output_dir, "invalid_generated_predictions.csv")
+    raw_prediction_sequences_file = os.path.join(training_args.output_dir, "raw_generated_predictions.csv")
     if training_args.do_predict:
         _clean_mem()
         logger.info("*** Predict ***")
@@ -934,30 +966,51 @@ def main():
                 predictions = tokenizer.batch_decode(
                     predict_results.predictions, skip_special_tokens=False, clean_up_tokenization_spaces=True
                 )
+                
+                # save raw output
+                predictions = [clean_output_seq(p) for p in predictions]
+                input_seqs = [clean_output_seq(tokenizer.decode(predict_dataset[i]['input_ids']))
+                              for i in range(len(predict_dataset))]
+                raw_out_df_dict = {"input": input_seqs, "predicted output": predictions}
+                if 'labels' in predict_dataset[0]:
+                    gold_out_seqs = [clean_output_seq(tokenizer.decode(predict_dataset[i]['labels']))
+                                     for i in range(len(predict_dataset))]
+                    raw_out_df_dict["gold output"] = gold_out_seqs
+                raw_out_df = pd.DataFrame(raw_out_df_dict)
+                raw_out_df.to_csv(raw_prediction_sequences_file, index=False)
+                wandb.save(raw_prediction_sequences_file)
                 # Log example instance 
                 i = 0
                 logger.info(f"\n\n**      Example (idx: {i}):      **")
-                logger.info(f"* Input Seq:\t\t {tokenizer.decode(predict_dataset[i]['input_ids']).rstrip('<pad>')}")
-                
+                logger.info(f"* Input Seq:\t\t {input_seqs[i]}")
                 if 'labels' in predict_dataset[0]:
-                    logger.info(f"* Gold Output:\t\t {tokenizer.decode(predict_dataset[i]['labels']).rstrip('<pad>')}")
-                logger.info(f"* Predicted Output:\t {predictions[i].rstrip('<pad>')}")
+                    logger.info(f"* Gold Output:\t\t {gold_out_seqs[i]}")
+                logger.info(f"* Predicted Output:\t {predictions[i]}")
                 
                 #TODO future: remove non-QASRL segments of the output sequences 
                 #  e.g. depends on data_args.learn_predicate_type
 
+                # count num of QAs per predicted sequence (= predicate) using QA_PAIR_SEP
+                n_QAs_per_instance = np.array([1 + pred_seq.count(special_tokens_constants.separator_output_pairs) 
+                                              for pred_seq in predictions])
+                wandb.log({"Mean #-QAs": n_QAs_per_instance.mean()})
+                wandb.run.summary["Mean #-QAs"] = n_QAs_per_instance.mean()
+                
                 predicted_QAs: List[QuestionAnswer]; invalid_pred_seqs: List[str] 
                 predicted_QAs, invalid_pred_seqs = strings_to_objects_parser.to_qasrl_gs_csv_format(predict_dataset, predictions)
                 parsed_predictions = pd.DataFrame([x.to_dict() for x in predicted_QAs])
                 # Log invalid output sequences
-                logger.info(f"Number of invalid (mal-structued) predicted output sequences: {len(invalid_pred_seqs)} (%{100*len(invalid_pred_seqs)/len(predictions):.1f})"
+                invalid_output_rate = len(invalid_pred_seqs)/len(predictions)
+                logger.info(f"Number of invalid (mal-structued) predicted output sequences: {len(invalid_pred_seqs)} (%{100*invalid_output_rate:.1f})"
                             f"\n  Saving them into {invalid_output_prediction_file}")
+                wandb.log({"invalid output rate overall": invalid_output_rate})
+                wandb.run.summary["invalid output-seqeunce rate overall"] = invalid_output_rate
                 invalid_pred_df = pd.DataFrame(invalid_pred_seqs, columns=["Error-type", "output"])
                 invalid_pred_df.to_csv(invalid_output_prediction_file, index=False)
                 wandb.save(invalid_output_prediction_file)
                 invalid_types_relative_frequency = invalid_pred_df["Error-type"].value_counts()/len(predictions)
                 invalid_types_relative_frequency = invalid_types_relative_frequency.to_frame().transpose()
-                wandb.log({"invalid output sequences - relative frequency": invalid_types_relative_frequency}, commit=False)
+                wandb.log({"invalid output sequences - relative frequency": invalid_types_relative_frequency})
 
                 if len(parsed_predictions)>0 and "sentence" in predict_dataset.column_names:
                     qasrl_id2sent = {r["qasrl_id"]:r["sentence"] for r in predict_dataset}

@@ -58,6 +58,27 @@ class Preprocessor:
             target_seq = target_seq + " | " + row["predicate_type"] 
         return target_seq
     
+    def reverse_input_preprocessing(self, processed_sentence: str) -> str:
+        """
+        Return the original sentence from the preprocessed input sequence.
+        Args:
+            processed_sentence (str): the preprocessed input sequence, given
+                by `tokenizer.decode(token_ids, skip_special_tokens=True)`.
+        """
+        orig_sentence = processed_sentence
+        if self.data_args.preprocess_input_func == "input_predicate_repeated":
+            raise NotImplemented
+        elif self.data_args.preprocess_input_func == "qadiscourse_input":
+            raise NotImplemented
+        elif self.data_args.preprocess_input_func == "input_predicate_marker":
+            #TODO
+            # strip prefix (identified using colons ':')
+            if self.data_args.source_prefix is not None:
+                orig_sentence = ':'.join(orig_sentence.split(':')[1:])
+            # strip verb_form (last word)
+            orig_sentence = ' '.join(orig_sentence.split(' ')[:-1])
+        return orig_sentence
+    
     """
     Prefix for Sequence preprocessing:
     """

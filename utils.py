@@ -34,4 +34,12 @@ def str2num(s: str) -> Union[int, float]:
     except ValueError:
         num = float(s)
     return num
-    
+
+# available only as of python 3.9
+def without_prefix(s: str, prefix: str) -> str:
+    if not prefix: return s
+    return s[len(prefix):] if s.startswith(prefix) else s
+def without_suffix(s: str, suffix: str) -> str:
+    if not suffix: return s
+    return s[:-len(suffix)] if s.endswith(suffix) else s
+ 

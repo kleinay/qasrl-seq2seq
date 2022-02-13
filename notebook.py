@@ -120,7 +120,7 @@ def get_default_kwargs() -> Dict[str, Any]:
                                     logging_steps=500,
                                     eval_steps=500,
                                     save_steps=500,
-                                    metric_for_best_model="eval_rouge1", # "eval_Wh_and_answer_EM_F1",   # default: "eval_loss"
+                                    metric_for_best_model="eval_loss", # "eval_Wh_and_answer_EM_F1",   # default: "eval_loss"
                                     predicate_marker_type="generic",
                                     )  
     defaults = dict(default_boolean_args, **default_non_boolean_args)

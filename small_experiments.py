@@ -20,8 +20,11 @@ from notebook import *
 #                     append_verb_form=True,
 #                     predicate_marker_type="generic", # or "pred_type"
 #                     use_bilateral_predicate_marker=False,
+#                     load_best_model_at_end=True,
+#                     metric_for_best_model="rouge1", # or "eval_loss" / "rougeL"
 #                     learn_predicate_type=None, # or "pre" or "post"
 #                     limit_train_data=1.0,
+#                     limit_eval_data=1.0,
 #                     logging_steps=500,
 #                     eval_steps=500,
 #                     save_steps=500,
@@ -32,15 +35,38 @@ from notebook import *
 #                     )
 
 # #%%  best joint model so far
-for model_type in ["t5", "bart"]:
-    epochs=50
-    wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_baseline_long"
+for model_type in ["t5"]:#, "bart"]:
+    # epochs=50
+    # wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_baseline - debug"
+    # full_experiment(model_type=model_type,
+    #                     train_dataset="qanom",
+    #                     test_dataset="qanom",
+    #                     train_epochs=epochs,
+    #                     batch_size=12,
+    #                     source_prefix="Generate QAs: ",
+    #                     preprocess_input_func="input_predicate_marker",
+    #                     use_bilateral_predicate_marker=True,
+    #                     overwrite_output_dir=True,
+    #                     num_beams=3,
+    #                     logging_steps=500,
+    #                     eval_steps=500,
+    #                     save_steps=500,
+    #                     wandb_run_name=wandb_run_name,
+    #                     dir_switch="qanom_baseline",
+    #                     # qanom_joint_factor=14,
+    #                     description="""basline with short generic prefix, now taking `eval_loss` as metric_for_best_model (was set to default) """,
+    #                     # limit_train_data=0.01,
+    #                     # limit_eval_data=0.01,
+    #                     )
+    
+    epochs=10
+    wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_joint"
     full_experiment(model_type=model_type,
-                        train_dataset="qanom",
+                        train_dataset="joint_qanom",
                         test_dataset="qanom",
                         train_epochs=epochs,
                         batch_size=12,
-                        source_prefix="Generate: ",
+                        source_prefix="Generate QAs for <predicate_type> QASRL: ",
                         preprocess_input_func="input_predicate_marker",
                         use_bilateral_predicate_marker=True,
                         overwrite_output_dir=True,
@@ -49,11 +75,12 @@ for model_type in ["t5", "bart"]:
                         eval_steps=500,
                         save_steps=500,
                         wandb_run_name=wandb_run_name,
-                        dir_switch="qanom_long",
-                        # qanom_joint_factor=14,
-                        description="""basline with short generic prefix, load_best_model=True""",
-                        )
-    
+                        dir_switch="joint",
+                        qanom_joint_factor=14,
+                        description="""joint orig""",
+                        load_best_model_at_end=True,
+                        metric_for_best_model="rouge1",
+                        ) 
     # epochs = 60
     # wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_long"
     # full_experiment(model_type=model_type,
@@ -73,48 +100,48 @@ for model_type in ["t5", "bart"]:
     #                     description="""shorter pred-type prefix, bilateral marker, beams=3, qanom_factor=14""",
     #                     )
     
-model_type="t5"
-epochs=10
-wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_exp-baseline"
-full_experiment(model_type=model_type,
-                    train_dataset="qanom",
-                    test_dataset="qanom",
-                    train_epochs=epochs,
-                    batch_size=12,
-                    source_prefix="Generate: ",
-                    preprocess_input_func="input_predicate_marker",
-                    use_bilateral_predicate_marker=True,
-                    overwrite_output_dir=True,
-                    num_beams=3,
-                    logging_steps=200,
-                    eval_steps=200,
-                    save_steps=200,
-                    wandb_run_name=wandb_run_name,
-                    dir_switch="qanom_exp",
-                    # qanom_joint_factor=14,
-                    description="""experiment: baseline""",
-                    )
+# model_type="t5"
+# epochs=10
+# wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_exp-baseline"
+# full_experiment(model_type=model_type,
+#                     train_dataset="qanom",
+#                     test_dataset="qanom",
+#                     train_epochs=epochs,
+#                     batch_size=12,
+#                     source_prefix="Generate: ",
+#                     preprocess_input_func="input_predicate_marker",
+#                     use_bilateral_predicate_marker=True,
+#                     overwrite_output_dir=True,
+#                     num_beams=3,
+#                     logging_steps=200,
+#                     eval_steps=200,
+#                     save_steps=200,
+#                     wandb_run_name=wandb_run_name,
+#                     dir_switch="qanom_exp",
+#                     # qanom_joint_factor=14,
+#                     description="""experiment: baseline""",
+#                     )
 
-wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_exp-batch=120"
-full_experiment(model_type=model_type,
-                    train_dataset="qanom",
-                    test_dataset="qanom",
-                    train_epochs=epochs,
-                    batch_size=12,
-                    gradient_accumulation_steps=10,
-                    source_prefix="Generate: ",
-                    preprocess_input_func="input_predicate_marker",
-                    use_bilateral_predicate_marker=True,
-                    overwrite_output_dir=True,
-                    num_beams=3,
-                    logging_steps=200,
-                    eval_steps=200,
-                    save_steps=200,
-                    wandb_run_name=wandb_run_name,
-                    dir_switch="qanom_exp",
-                    # qanom_joint_factor=14,
-                    description="""experiment: batch=120""",
-                    )
+# wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_exp-batch=120"
+# full_experiment(model_type=model_type,
+#                     train_dataset="qanom",
+#                     test_dataset="qanom",
+#                     train_epochs=epochs,
+#                     batch_size=12,
+#                     gradient_accumulation_steps=10,
+#                     source_prefix="Generate: ",
+#                     preprocess_input_func="input_predicate_marker",
+#                     use_bilateral_predicate_marker=True,
+#                     overwrite_output_dir=True,
+#                     num_beams=3,
+#                     logging_steps=200,
+#                     eval_steps=200,
+#                     save_steps=200,
+#                     wandb_run_name=wandb_run_name,
+#                     dir_switch="qanom_exp",
+#                     # qanom_joint_factor=14,
+#                     description="""experiment: batch=120""",
+#                     )
 
 #%%
 # prefix & decoding experiments

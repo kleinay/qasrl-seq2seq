@@ -235,13 +235,6 @@ class DataTrainingArguments:
                     "value if set."
         },
     )
-    max_predict_samples: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "For debugging purposes or quicker training, truncate the number of prediction examples to this "
-                    "value if set."
-        },
-    )
     num_beams: Optional[int] = field(
         default=None,
         metadata={
@@ -634,7 +627,7 @@ def main():
                             "verb_form": verb_form, "is_verbal": is_verbal, "predicate_type": pred_type} 
                            for input, predicate, question, answer, answer_range, predicate_idx, qasrl_id, verb_form, is_verbal, pred_type in 
                            zip(inputs, predicates, questions, answers, answer_ranges, predicate_indices, qasrl_ids, verb_forms, is_verbals, pred_types)
-                           if question # TODO change to is_verbal     # Don't train on non-predicates
+                           if is_verbal # TODO change to is_verbal     # Don't train on non-predicates
                            ])     
 
         grouped_df = df.groupby(['sentence', 'predicate_idx'])
@@ -754,9 +747,10 @@ def main():
         if "test" not in raw_datasets:
             raise ValueError("--do_predict requires a test dataset")
         predict_dataset = raw_datasets["test"]
-        if data_args.max_predict_samples is not None:
-            predict_dataset = predict_dataset.select(range(data_args.max_predict_samples))
-        
+        if data_args.max_eval_samples is not None:
+            predict_dataset = predict_dataset.select(range(data_args.max_eval_samples))
+        if data_args.limit_eval_data is not None:
+            predict_dataset = predict_dataset.select(range(int(len(predict_dataset)*data_args.limit_eval_data)))
         # If predict_dataset includes gold standard reference, use the regular preprocessing which also prepares `labels`;
         # Otherwise, do inference without labels 
         if "question" in predict_dataset.column_names and "answers" in predict_dataset.column_names:
@@ -951,10 +945,10 @@ def main():
             num_beams=data_args.num_beams,
         )
         metrics = predict_results.metrics
-        max_predict_samples = (
-            data_args.max_predict_samples if data_args.max_predict_samples is not None else len(predict_dataset)
+        max_test_samples = (
+            data_args.max_eval_samples if data_args.max_eval_samples is not None else len(predict_dataset)
         )
-        metrics["predict_samples"] = min(max_predict_samples, len(predict_dataset))
+        metrics["predict_samples"] = min(max_test_samples, len(predict_dataset))
 
         trainer.log_metrics("predict", metrics)
         trainer.save_metrics("predict", metrics)

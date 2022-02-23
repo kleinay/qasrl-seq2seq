@@ -990,34 +990,39 @@ def main():
                 wandb.log({"Mean #-QAs": n_QAs_per_instance.mean()})
                 wandb.run.summary["Mean #-QAs"] = n_QAs_per_instance.mean()
                 
-                predicted_QAs: List[QuestionAnswer]; invalid_pred_seqs: List[str] 
-                predicted_QAs, invalid_pred_seqs = strings_to_objects_parser.to_qasrl_gs_csv_format(predict_dataset, predictions)
-                parsed_predictions = pd.DataFrame([x.to_dict() for x in predicted_QAs])
+                predicted_QAs: List[QuestionAnswer]; invalid_qa_subseqs: List[str] 
+                predicted_QAs, invalid_qa_subseqs = strings_to_objects_parser.to_qasrl_gs_csv_format(predict_dataset, predictions)
+                df_parsed_predictions = pd.DataFrame([x.to_dict() for x in predicted_QAs])
                 # Log invalid output sequences
-                invalid_output_rate = len(invalid_pred_seqs)/len(predictions)
-                logger.info(f"Number of invalid (mal-structued) predicted output sequences: {len(invalid_pred_seqs)} (%{100*invalid_output_rate:.1f})"
+                overall_n_qa_subseqs = len(predicted_QAs) + len(invalid_qa_subseqs)
+                invalid_output_rate = len(invalid_qa_subseqs)/overall_n_qa_subseqs
+                logger.info(f"Number of invalid (mal-structued) predicted output QAs: {len(invalid_qa_subseqs)} (%{100*invalid_output_rate:.1f})"
                             f"\n  Saving them into {invalid_output_prediction_file}")
-                wandb.log({"invalid output rate overall": invalid_output_rate})
-                wandb.run.summary["invalid output-seqeunce rate overall"] = invalid_output_rate
-                invalid_pred_df = pd.DataFrame(invalid_pred_seqs, columns=["Error-type", "output"])
+                wandb.log({"invalid output QA rate overall": invalid_output_rate})
+                wandb.run.summary["invalid output QA rate overall"] = invalid_output_rate
+                invalid_pred_df = pd.DataFrame(invalid_qa_subseqs, columns=["Error-type", "output"])
                 invalid_pred_df.to_csv(invalid_output_prediction_file, index=False)
                 wandb.save(invalid_output_prediction_file)
                 invalid_types_relative_frequency = invalid_pred_df["Error-type"].value_counts()/len(predictions)
-                invalid_types_relative_frequency = invalid_types_relative_frequency.to_frame().transpose()
-                wandb.log({"invalid output sequences - relative frequency": invalid_types_relative_frequency})
+                errors_log_dict = {f"invalid output QA rate - error type: {error_type}": relative_frequency
+                                   for error_type, relative_frequency in invalid_types_relative_frequency.items()}
+                wandb.log(errors_log_dict)
+                wandb.run.summary.update(errors_log_dict)
+                wandb.log({"invalid output QA rate by type": invalid_types_relative_frequency.to_frame().transpose()})
+                     
 
-                if len(parsed_predictions)>0 and "sentence" in predict_dataset.column_names:
+                if len(df_parsed_predictions)>0 and "sentence" in predict_dataset.column_names:
                     qasrl_id2sent = {r["qasrl_id"]:r["sentence"] for r in predict_dataset}
-                    parsed_predictions['sentence'] = parsed_predictions['qasrl_id'].apply(qasrl_id2sent.get) # predict_dataset['qasrl_id']
+                    df_parsed_predictions['sentence'] = df_parsed_predictions['qasrl_id'].apply(qasrl_id2sent.get) # predict_dataset['qasrl_id']
                 
                 logger.info(f"Saving predictions into {output_prediction_file}...")
-                if len(parsed_predictions) == 0:
+                if len(df_parsed_predictions) == 0:
                     # write empty csv with correct header
                     header = "qasrl_id,verb_idx,verb,question,answer,answer_range,verb_form,wh,aux,subj,obj,prep,obj2,is_negated,is_passive,sentence"
                     with open(output_prediction_file, "w") as fout:
                         fout.write(header)
                 else:
-                    parsed_predictions.to_csv(output_prediction_file, index=False) 
+                    df_parsed_predictions.to_csv(output_prediction_file, index=False) 
                 wandb.save(output_prediction_file)
         
     if training_args.push_to_hub:

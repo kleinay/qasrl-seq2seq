@@ -358,7 +358,7 @@ def full_experiment(model_type: str, # e.g. "bart", "t5", "t5-large", "iarfmoose
         json.dump(experiment_kwargs, fout)
     wandb.save(f"{model_dir}/experiment_kwargs.json")
     run = predict(model_type, qasrl_test_dataset, model_dir=model_dir, **kwargs)
-    decode_into_qasrl(model_dir, qasrl_test_dataset)
+    # decode_into_qasrl(model_dir, qasrl_test_dataset)
     unlabelled_arg, labelled_arg, unlabelled_role = evaluate(model_dir, qasrl_test_dataset, wandb_run_name=run.name)
     
     wandb.save(f"{model_dir}/*.csv")
@@ -391,7 +391,8 @@ kwargs for `full_experiment` (and `run_summarization` script):
 
 """
 
-def load_and_predict(saved_model_path: str, test_file, 
+def load_and_predict(saved_model_path: str, 
+                     test_file, 
                      output_dir=None, 
                      wandb_run_name=None, 
                      decode_qasrl: bool = True, 
@@ -500,7 +501,7 @@ def load_and_evaluate(saved_model_path: str,
     model_dir=saved_model_path  
     model_type = kwargs.pop("model_type") 
     run = predict(model_type, qasrl_test_dataset, model_dir=model_dir,  wandb_run_name=wandb_run_name, **kwargs)
-    decode_into_qasrl(output_dir, qasrl_test_dataset)
+    # decode_into_qasrl(output_dir, qasrl_test_dataset)
     unlabelled_arg, labelled_arg, unlabelled_role = evaluate(output_dir, qasrl_test_dataset, wandb_run_name=wandb_run_name)
     
     wandb.save(f"{output_dir}/*.csv")

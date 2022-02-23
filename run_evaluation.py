@@ -43,20 +43,17 @@ def evaluate_qanom(model_dir: str, wandb_run_name: Optional[str]):
         return Metrics(0,0,1), Metrics(0,0,1), Metrics(0,0,1)
     
     qanom_test_df = read_annot_csv("QANom/dataset/annot.test.csv")
-    df_generated_predictions = read_annot_csv(f"{model_dir}/generated_predictions.csv")
-    df_parsed_outputs = read_annot_csv(f"{model_dir}/decoded_output.csv")
-    # drop rows of invalid questins (failing the state machine)
-    df_is_invalid_question = df_parsed_outputs.question=="--Invalid Output--"
-    n_invalid_question = df_is_invalid_question.sum()
-    percent_invalid_question = (100*n_invalid_question / df_parsed_outputs.shape[0]).item()
-    df_invalid_questions = df_generated_predictions[df_is_invalid_question]
-    invalid_questions_fn = f"{model_dir}/invalid_output_questions.csv"
-    df_invalid_questions.to_csv(invalid_questions_fn, index=False)
-    print(f"{n_invalid_question} generated questions ({percent_invalid_question:.2}%) were judged invalid by the qasrl-state-machine. \n"
-        f"Check them out here:  {invalid_questions_fn}")
-    wandb.log({"invalid output questions - relative proportion": percent_invalid_question}, commit=False) # relative to number of all parsed QAs
-    wandb.save(invalid_questions_fn)
-    df_parsed_outputs = df_parsed_outputs[~df_is_invalid_question]
+    df_parsed_outputs = read_annot_csv(f"{model_dir}/generated_predictions.csv")
+    # adjust `df_parsed_outputs` to qanom format for qanom evaluation package requirements 
+    from qanom.utils import rename_column
+    rename_column(df_parsed_outputs, 'verb_idx', 'target_idx')
+    rename_column(df_parsed_outputs, 'verb', 'noun')
+    df_parsed_outputs['is_verbal'] = True
+    df_parsed_outputs['verb_prefix'] = ''
+    df_parsed_outputs['verb_slot_inflection'] = ''
+    for slot in ['wh', 'subj', 'obj', 'obj2', 'aux', 'prep']:   # replace underscore with empty string
+        df_parsed_outputs[slot] = df_parsed_outputs[slot].apply(lambda s: '' if s=='_' else s)
+    
     # Add empty predictions for all instances from gold test not in predicted output, so that evaluation will count them as FN
     all_keys = set(qanom_test_df.key)
     missing_keys = all_keys - set(df_parsed_outputs.key)

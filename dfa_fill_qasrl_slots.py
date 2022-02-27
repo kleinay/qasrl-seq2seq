@@ -9,8 +9,8 @@ STATE_TO_SLOT = {
     2: "subj",
     3: "verb",
     "<1>_0": "obj",
-    "<1>_1": "obj2",
-    "<1>_2": "prep",
+    "<1>_1": "prep",
+    "<1>_2": "obj2",
 }
 
 SLOT_TO_STATE = {slot: state for state, slot in STATE_TO_SLOT.items()}

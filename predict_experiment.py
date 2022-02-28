@@ -8,19 +8,12 @@ from notebook import *
 model_dir = "trained_models/t5_10ep-joint-qanom_15.12.21"
 # model_dir = "trained_models/t5_30ep-qanom-baseline-17.12.21"
 # model_dir = "/home/nlp/kleinay/tmp/t5-tst-summarization/qanom/qanom_baseline"
-# for model_dir in ["joint_qanom_short-prefix", "qanom_long"]:
-#   load_and_evaluate("/home/nlp/kleinay/tmp/t5-tst-summarization/qanom/" + model_dir,
-load_and_evaluate(model_dir,
-                test_dataset = "qanom",
+
+load_and_predict(model_dir,
+                test_file = "tst2.csv",
                 output_dir=None, 
-                wandb_run_name=f"{now()} Evaluate {model_dir} on qanom",
+                wandb_run_name=f"{now()} testing Predict (debug)",
                 # constrain_generation=False,
-                num_beams=3,
-                )
-load_and_evaluate(model_dir,
-                test_dataset = "qasrl",
-                output_dir=None, 
-                wandb_run_name=f"{now()} Evaluate {model_dir} on qasrl",
-                # constrain_generation=True,
+                # limit_eval_data=0.05,
                 num_beams=3,
                 )

@@ -35,6 +35,12 @@ def str2num(s: str) -> Union[int, float]:
         num = float(s)
     return num
 
+def dict_without_keys(d: dict, kwargs_to_remove) -> dict:
+    ret = d.copy()
+    for kw in kwargs_to_remove:
+        ret.pop(kw, None)
+    return ret    
+
 # available only as of python 3.9
 def without_prefix(s: str, prefix: str) -> str:
     if not prefix: return s

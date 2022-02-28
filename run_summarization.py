@@ -56,8 +56,8 @@ from transformers.utils.versions import require_version
 from preprocessing import Preprocessor
 from pipeline import get_markers_for_model
 from qasrl_gs.scripts.common import QuestionAnswer
-from qasrl_gs.scripts.evaluate import evaluate
 from utils import setup_wandb, replaceKeys, str2num, without_prefix, without_suffix
+import run_evaluation
 
 check_min_version("4.10.0.dev0")
 
@@ -147,6 +147,9 @@ class DataTrainingArguments:
     Arguments pertaining to what data we are going to input our model for training and eval.
     """
 
+    do_eval_on: Optional[str] = field(
+        default="validation", metadata={"help": "Wether to perform evaluation on 'validation' set or on 'test' set"}
+    )
     limit_train_data: Optional[float] = field(
         default=1.0, metadata={"help": "Percentage of training samples to use during training."}
     )
@@ -198,7 +201,7 @@ class DataTrainingArguments:
         },
     )
     max_target_length: Optional[int] = field(
-        default=128,
+        default=200,
         metadata={
             "help": "The maximum total sequence length for target text after tokenization. Sequences longer "
                     "than this will be truncated, sequences shorter will be padded."
@@ -551,7 +554,7 @@ def main():
     if training_args.do_train:
         column_names = raw_datasets["train"].column_names
     elif training_args.do_eval:
-        column_names = raw_datasets["validation"].column_names
+        column_names = raw_datasets[data_args.do_eval_on].column_names
     elif training_args.do_predict:
         column_names = raw_datasets["test"].column_names
     else:
@@ -700,7 +703,7 @@ def main():
         model_inputs["qasrl_id"] = predicate_level_df['qasrl_id'].tolist()
         return model_inputs        
 
-
+    # Prepare datasets (load, sample/limit, preprocess)
     _clean_mem()
     if training_args.do_train:
         if "train" not in raw_datasets:
@@ -711,6 +714,7 @@ def main():
         if data_args.limit_train_data is not None:
             train_dataset = train_dataset.select(range(int(len(train_dataset)*data_args.limit_train_data)))
         with training_args.main_process_first(desc="train dataset map pre-processing"):
+            orig_train_dataset = train_dataset
             train_dataset = train_dataset.map(
                 preprocess_function,
                 batched=True,
@@ -723,17 +727,18 @@ def main():
         data_example = train_dataset[0]
         logger.info(f"Data example: {data_example}") 
 
-    if training_args.do_eval:
+    if training_args.do_train or (training_args.do_eval and data_args.do_eval_on == "validation"):
         max_target_length = data_args.val_max_target_length
         if "validation" not in raw_datasets:
-            raise ValueError("--do_eval requires a validation dataset")
-        eval_dataset = raw_datasets["validation"]
+            raise ValueError("--do_eval and --do_train require a validation dataset")
+        validation_dataset = raw_datasets["validation"]
         if data_args.max_eval_samples is not None:
-            eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
+            validation_dataset = validation_dataset.select(range(data_args.max_eval_samples))
         if data_args.limit_eval_data is not None:
-            eval_dataset = eval_dataset.select(range(int(len(eval_dataset)*data_args.limit_eval_data)))
+            validation_dataset = validation_dataset.select(range(int(len(validation_dataset)*data_args.limit_eval_data)))
         with training_args.main_process_first(desc="validation dataset map pre-processing"):
-            eval_dataset = eval_dataset.map(
+            orig_validation_dataset = validation_dataset
+            validation_dataset = validation_dataset.map(
                 preprocess_function,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
@@ -742,25 +747,26 @@ def main():
                 desc="Preprocessing validation dataset",
             )
 
-    if training_args.do_predict:
+    if training_args.do_predict or (training_args.do_eval and data_args.do_eval_on == "test"):
         max_target_length = data_args.val_max_target_length
         if "test" not in raw_datasets:
-            raise ValueError("--do_predict requires a test dataset")
-        predict_dataset = raw_datasets["test"]
+            raise ValueError("--do_predict (or --do_eval_on='test') requires a test dataset")
+        test_dataset = raw_datasets["test"]
         if data_args.max_eval_samples is not None:
-            predict_dataset = predict_dataset.select(range(data_args.max_eval_samples))
+            test_dataset = test_dataset.select(range(data_args.max_eval_samples))
         if data_args.limit_eval_data is not None:
-            predict_dataset = predict_dataset.select(range(int(len(predict_dataset)*data_args.limit_eval_data)))
+            test_dataset = test_dataset.select(range(int(len(test_dataset)*data_args.limit_eval_data)))
         # If predict_dataset includes gold standard reference, use the regular preprocessing which also prepares `labels`;
         # Otherwise, do inference without labels 
-        if "question" in predict_dataset.column_names and "answers" in predict_dataset.column_names:
+        if "question" in test_dataset.column_names and "answers" in test_dataset.column_names:
             do_inference_without_labels = False
             preprocessing_func_for_test = preprocess_function
         else:
             do_inference_without_labels = True
             preprocessing_func_for_test = preprocess_for_inference
-        with training_args.main_process_first(desc="prediction dataset map pre-processing"):
-            predict_dataset = predict_dataset.map(
+        with training_args.main_process_first(desc="test dataset map pre-processing"):
+            orig_test_dataset = test_dataset
+            test_dataset = test_dataset.map(
                 preprocessing_func_for_test,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
@@ -768,6 +774,11 @@ def main():
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="Preprocessing prediction dataset",
             )
+    # Set `evaluation_dataset` as the dataset we perform stanalone evaluation on.
+    #  it can be either the `validation_dataset` or `test_dataset`, depending on `data_args.do_eval_on`
+    evaluation_dataset = validation_dataset if data_args.do_eval_on == "validation" else test_dataset
+    orig_evaluation_dataset = orig_validation_dataset if data_args.do_eval_on == "validation" else orig_test_dataset
+
 
     # Data collator
     label_pad_token_id = -100 if data_args.ignore_pad_token_for_loss else tokenizer.pad_token_id
@@ -777,7 +788,10 @@ def main():
         label_pad_token_id=label_pad_token_id,
         pad_to_multiple_of=8 if training_args.fp16 else None,
     )
-
+    
+    from strings_to_objects_parser import StringsToObjectsParser
+    strings_to_objects_parser = StringsToObjectsParser(special_tokens_constants, tokenizer)
+    
     # Metric
     rouge_metric = load_metric("rouge")
     exact_match_metric = load_metric("metrics/exact_match.py")
@@ -791,15 +805,12 @@ def main():
             seq = without_prefix(seq, special_tokens_constants.bos_token)
         return seq.strip()
     
-    def postprocess_text(preds, labels):
-        preds = [clean_output_seq(pred) for pred in preds]
-        labels = [clean_output_seq(label) for label in labels]
+    def postprocess_sequences(sequences):
+        return [clean_output_seq(pred) for pred in sequences]
+    
+    def prepare_for_rouge(seqs):
+        return ["\n".join(nltk.sent_tokenize(seq)) for seq in seqs]
 
-        # rougeLSum expects newline after each sentence
-        preds = ["\n".join(nltk.sent_tokenize(pred)) for pred in preds]
-        labels = ["\n".join(nltk.sent_tokenize(label)) for label in labels]
-
-        return preds, labels
 
     def compute_metrics(eval_preds: EvalPrediction):
         logger.info("__Computing metrics__")
@@ -813,9 +824,12 @@ def main():
         decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=False, clean_up_tokenization_spaces=True)
 
         # Some simple post-processing
-        decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
+        decoded_preds = postprocess_sequences(decoded_preds)
+        decoded_labels = postprocess_sequences(decoded_labels)
 
-        result = rouge_metric.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
+        result = rouge_metric.compute(predictions=prepare_for_rouge(decoded_preds), 
+                                      references=prepare_for_rouge(decoded_labels), 
+                                      use_stemmer=True)
         # Extract a few results from ROUGE
         result = {key: value.mid.fmeasure * 100 for key, value in result.items()}
 
@@ -848,10 +862,11 @@ def main():
     if model_args.debug_mode:
         if training_args.do_train:
             train_dataset = train_dataset.shuffle(seed=42).select(range(5))
+            validation_dataset = validation_dataset.shuffle(seed=42).select(range(5))
         if training_args.do_eval:
-            eval_dataset = eval_dataset.shuffle(seed=42).select(range(5))
+            evaluation_dataset = evaluation_dataset.shuffle(seed=42).select(range(5))
         if training_args.do_predict:
-            predict_dataset = predict_dataset.shuffle(seed=42).select(range(5))
+            test_dataset = test_dataset.shuffle(seed=42).select(range(5))
 
     # Modify training_args before initializing Trainer, to allow evaluation during training
     # training_args.evaluation_strategy = transformers.trainer_utils.IntervalStrategy.STEPS # 'NO', 'EPOCH' or 'STEPS'
@@ -862,7 +877,9 @@ def main():
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
-        eval_dataset=eval_dataset if training_args.do_eval else None,
+        eval_dataset=validation_dataset \
+            if training_args.do_train or (training_args.do_eval and data_args.do_eval_on=="validation") \
+            else None,
         tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=compute_metrics if training_args.predict_with_generate else None,
@@ -901,54 +918,156 @@ def main():
             sentence = preprocessor.reverse_input_preprocessing(sentence)
             return get_qasrl_full_sequence_dfa(sentence, tokenizer, special_tokens_constants)
         # enable special dfa-constrained beam search
+        logger.info("Applying constrained decoding...")
         set_decoding_to_dfa_constrained(model, dfa_factory=dfa_factory, tokenizer=tokenizer)
         data_args.num_beams = data_args.num_beams or 2 # must enable beam search to utilize DFA-constrained decoding
-        
-    # Evaluation
-    results = {}
-    if training_args.do_eval:
-        _clean_mem()
-        logger.info("*** Evaluate ***")
-
-        metrics = trainer.evaluate(
-            max_length=data_args.val_max_target_length,
-            num_beams=data_args.num_beams,
-            metric_key_prefix="eval"
-        )
-        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
-        metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
-
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
-
-    from strings_to_objects_parser import StringsToObjectsParser
-    strings_to_objects_parser = StringsToObjectsParser(special_tokens_constants, tokenizer)
-
-    # Inference (Prediction on test)
+    
+    # file names for saving predictions - raw, validly parsed, & invalids   
     if "output_file" in training_args.__dict__:
         output_prediction_file = training_args.output_file
     else:
         output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.csv")
     invalid_output_prediction_file = os.path.join(training_args.output_dir, "invalid_generated_predictions.csv")
     raw_prediction_sequences_file = os.path.join(training_args.output_dir, "raw_generated_predictions.csv")
+
+    """ 
+    Inference (pre-evaluation) Procedure (dev/test) - parse predictions to qasrl format, save outputs to files, log,  
+    """
+    def decode_and_parse_predictions(dataset, predictions) -> pd.DataFrame:
+        # assuming `predictions` is already textual, obtained by 
+        #  tokenizer.batch_decode(token_ids, skip_special_tokens=False, clean_up_tokenization_spaces=True) 
+        # TODO copy from "do_predict" below
+        predictions = [clean_output_seq(p) for p in predictions]
+        input_seqs = [clean_output_seq(tokenizer.decode(dataset[i]['input_ids']))
+                      for i in range(len(dataset))]
+        
+        #TODO future: remove non-QASRL segments of the output sequences 
+        #  e.g. depends on data_args.learn_predicate_type
+        
+        # save raw output
+        raw_out_df_dict = {"input": input_seqs, "predicted output": predictions}
+        if 'labels' in dataset[0]:
+            gold_out_seqs = [clean_output_seq(tokenizer.decode(dataset[i]['labels']))
+                                for i in range(len(dataset))]
+            raw_out_df_dict["gold output"] = gold_out_seqs
+        raw_out_df = pd.DataFrame(raw_out_df_dict)
+        raw_out_df.to_csv(raw_prediction_sequences_file, index=False)
+        wandb.save(raw_prediction_sequences_file)
+        # Log example instance 
+        example_index = 0
+        logger.info(f"\n\n**      Example (idx: {example_index}):      **")
+        logger.info(raw_out_df.iloc[example_index])
+        
+        # count num of QAs per predicted sequence (= predicate) using QA_PAIR_SEP
+        n_QAs_per_instance = np.array([1 + pred_seq.count(special_tokens_constants.separator_output_pairs) 
+                                       for pred_seq in predictions])
+        wandb.log({"Mean #-QAs": n_QAs_per_instance.mean()})
+        wandb.run.summary["Mean #-QAs"] = n_QAs_per_instance.mean()
+        
+        # parse raw output; receive valid and invalid QAs 
+        predicted_QAs: List[QuestionAnswer]
+        invalid_qa_subseqs: List[str] 
+        predicted_QAs, invalid_qa_subseqs = strings_to_objects_parser.to_qasrl_gs_csv_format(dataset, predictions)
+        
+        # Log invalid output sequences
+        overall_n_qa_subseqs = len(predicted_QAs) + len(invalid_qa_subseqs)
+        invalid_output_rate = len(invalid_qa_subseqs)/overall_n_qa_subseqs
+        logger.info(f"Number of invalid (mal-structued) predicted output QAs: {len(invalid_qa_subseqs)} (%{100*invalid_output_rate:.1f})"
+                    f"\n  Saving them into {invalid_output_prediction_file}")
+        wandb.log({"invalid output QA rate overall": invalid_output_rate})
+        wandb.run.summary["invalid output QA rate overall"] = invalid_output_rate
+        invalid_pred_df = pd.DataFrame(invalid_qa_subseqs, columns=["Error-type", "output"])
+        invalid_pred_df.to_csv(invalid_output_prediction_file, index=False)
+        wandb.save(invalid_output_prediction_file)
+        invalid_types_relative_frequency = invalid_pred_df["Error-type"].value_counts()/len(predictions)
+        errors_log_dict = {f"invalid output QA rate - error type: {error_type}": relative_frequency
+                            for error_type, relative_frequency in invalid_types_relative_frequency.items()}
+        wandb.log(errors_log_dict)
+        wandb.run.summary.update(errors_log_dict)
+        wandb.log({"invalid output QA rate by type": invalid_types_relative_frequency.to_frame().transpose()})
+    
+        # Save parsed predictions in qasrl csv format                     
+        df_parsed_predictions = pd.DataFrame([x.to_dict() for x in predicted_QAs])
+        if len(df_parsed_predictions)>0 and "sentence" in dataset.column_names:
+            qasrl_id2sent = {r["qasrl_id"]:r["sentence"] for r in dataset}
+            df_parsed_predictions['sentence'] = df_parsed_predictions['qasrl_id'].apply(qasrl_id2sent.get) # dataset['qasrl_id']
+        logger.info(f"Saving predictions into {output_prediction_file}...")
+        if len(df_parsed_predictions) == 0:
+            # write empty csv with correct header
+            header = "qasrl_id,verb_idx,verb,question,answer,answer_range,verb_form,wh,aux,subj,obj,prep,obj2,is_negated,is_passive,sentence"
+            with open(output_prediction_file, "w") as fout:
+                fout.write(header)
+        else:
+            df_parsed_predictions.to_csv(output_prediction_file, index=False) 
+        wandb.save(output_prediction_file)
+        
+        return df_parsed_predictions
+    
+    
+    results = {}
+    if training_args.do_eval:
+        _clean_mem()
+        logger.info("*** Evaluate ***")
+
+        evaluation_predict_results = trainer.predict(
+            evaluation_dataset,
+            metric_key_prefix="eval",
+            max_length=data_args.val_max_target_length,
+            num_beams=data_args.num_beams,
+        )
+        metrics = evaluation_predict_results.metrics
+        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(evaluation_dataset)
+        metrics["eval_samples"] = min(max_eval_samples, len(evaluation_dataset))
+
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
+        
+        if trainer.is_world_process_zero():
+            logger.info(f"length of predictions: {len(evaluation_predict_results.predictions)}")
+            predictions = tokenizer.batch_decode(
+                evaluation_predict_results.predictions, skip_special_tokens=False, clean_up_tokenization_spaces=True
+            )
+            
+            df_parsed_predictions = decode_and_parse_predictions(evaluation_dataset, predictions)
+            df_gold = pd.DataFrame(orig_evaluation_dataset)
+            eval_measures = run_evaluation.run_qanom_evaluation(df_parsed_predictions, df_gold)
+            unlabelled_arg, labelled_arg, unlabelled_role = eval_measures
+            eval_measures_dict = {
+                "Unlabled Arg f1": unlabelled_arg.f1(),
+                "Unlabled Arg precision": unlabelled_arg.prec(),
+                "Unlabled Arg recall": unlabelled_arg.recall(),
+                "Labled Arg f1": labelled_arg.f1(),
+                "Labled Arg precision": labelled_arg.prec(),
+                "Labled Arg recall": labelled_arg.recall(),
+                "Role f1": unlabelled_role.f1(),
+                "Role precision": unlabelled_role.prec(),
+                "Role recall": unlabelled_role.recall(),
+            }
+            run_evaluation.print_evaluations(unlabelled_arg, labelled_arg, unlabelled_role)
+            wandb.log(eval_measures_dict)
+            results.update(eval_measures_dict) 
+
+
+    # Inference (Prediction on test)
     if training_args.do_predict:
         _clean_mem()
         logger.info("*** Predict ***")
 
+        #TODO check what happens here when do_inference_without_labels is False, how does the decoder begins? does it use <pad> from the ground-turth `labels`?
         if do_inference_without_labels and model_args.model_type == 't5':
             # T5 decoders expect to be initialized with the pad_token
-            predict_dataset = predict_dataset.add_column('labels', [[tokenizer.pad_token_id]] * predict_dataset.num_rows)
+            test_dataset = test_dataset.add_column('labels', [[tokenizer.pad_token_id]] * test_dataset.num_rows)
         predict_results = trainer.predict(
-            predict_dataset,
+            test_dataset,
             metric_key_prefix="predict",
             max_length=data_args.val_max_target_length,
             num_beams=data_args.num_beams,
         )
         metrics = predict_results.metrics
         max_test_samples = (
-            data_args.max_eval_samples if data_args.max_eval_samples is not None else len(predict_dataset)
+            data_args.max_eval_samples if data_args.max_eval_samples is not None else len(test_dataset)
         )
-        metrics["predict_samples"] = min(max_test_samples, len(predict_dataset))
+        metrics["predict_samples"] = min(max_test_samples, len(test_dataset))
 
         trainer.log_metrics("predict", metrics)
         trainer.save_metrics("predict", metrics)
@@ -956,75 +1075,14 @@ def main():
         if trainer.is_world_process_zero():
             if training_args.predict_with_generate:
                 logger.info(f"length of predict_results.predictions: {len(predict_results.predictions)}")
-                logger.info("__Writing to file__")
                 predictions = tokenizer.batch_decode(
                     predict_results.predictions, skip_special_tokens=False, clean_up_tokenization_spaces=True
                 )
                 
-                # save raw output
-                predictions = [clean_output_seq(p) for p in predictions]
-                input_seqs = [clean_output_seq(tokenizer.decode(predict_dataset[i]['input_ids']))
-                              for i in range(len(predict_dataset))]
-                raw_out_df_dict = {"input": input_seqs, "predicted output": predictions}
-                if 'labels' in predict_dataset[0]:
-                    gold_out_seqs = [clean_output_seq(tokenizer.decode(predict_dataset[i]['labels']))
-                                     for i in range(len(predict_dataset))]
-                    raw_out_df_dict["gold output"] = gold_out_seqs
-                raw_out_df = pd.DataFrame(raw_out_df_dict)
-                raw_out_df.to_csv(raw_prediction_sequences_file, index=False)
-                wandb.save(raw_prediction_sequences_file)
-                # Log example instance 
-                i = 0
-                logger.info(f"\n\n**      Example (idx: {i}):      **")
-                logger.info(f"* Input Seq:\t\t {input_seqs[i]}")
-                if 'labels' in predict_dataset[0]:
-                    logger.info(f"* Gold Output:\t\t {gold_out_seqs[i]}")
-                logger.info(f"* Predicted Output:\t {predictions[i]}")
-                
-                #TODO future: remove non-QASRL segments of the output sequences 
-                #  e.g. depends on data_args.learn_predicate_type
+                # this will also save the output csv to `output_prediction_file`
+                df_parsed_predictions = decode_and_parse_predictions(test_dataset, predictions)
+                  
 
-                # count num of QAs per predicted sequence (= predicate) using QA_PAIR_SEP
-                n_QAs_per_instance = np.array([1 + pred_seq.count(special_tokens_constants.separator_output_pairs) 
-                                              for pred_seq in predictions])
-                wandb.log({"Mean #-QAs": n_QAs_per_instance.mean()})
-                wandb.run.summary["Mean #-QAs"] = n_QAs_per_instance.mean()
-                
-                predicted_QAs: List[QuestionAnswer]; invalid_qa_subseqs: List[str] 
-                predicted_QAs, invalid_qa_subseqs = strings_to_objects_parser.to_qasrl_gs_csv_format(predict_dataset, predictions)
-                df_parsed_predictions = pd.DataFrame([x.to_dict() for x in predicted_QAs])
-                # Log invalid output sequences
-                overall_n_qa_subseqs = len(predicted_QAs) + len(invalid_qa_subseqs)
-                invalid_output_rate = len(invalid_qa_subseqs)/overall_n_qa_subseqs
-                logger.info(f"Number of invalid (mal-structued) predicted output QAs: {len(invalid_qa_subseqs)} (%{100*invalid_output_rate:.1f})"
-                            f"\n  Saving them into {invalid_output_prediction_file}")
-                wandb.log({"invalid output QA rate overall": invalid_output_rate})
-                wandb.run.summary["invalid output QA rate overall"] = invalid_output_rate
-                invalid_pred_df = pd.DataFrame(invalid_qa_subseqs, columns=["Error-type", "output"])
-                invalid_pred_df.to_csv(invalid_output_prediction_file, index=False)
-                wandb.save(invalid_output_prediction_file)
-                invalid_types_relative_frequency = invalid_pred_df["Error-type"].value_counts()/len(predictions)
-                errors_log_dict = {f"invalid output QA rate - error type: {error_type}": relative_frequency
-                                   for error_type, relative_frequency in invalid_types_relative_frequency.items()}
-                wandb.log(errors_log_dict)
-                wandb.run.summary.update(errors_log_dict)
-                wandb.log({"invalid output QA rate by type": invalid_types_relative_frequency.to_frame().transpose()})
-                     
-
-                if len(df_parsed_predictions)>0 and "sentence" in predict_dataset.column_names:
-                    qasrl_id2sent = {r["qasrl_id"]:r["sentence"] for r in predict_dataset}
-                    df_parsed_predictions['sentence'] = df_parsed_predictions['qasrl_id'].apply(qasrl_id2sent.get) # predict_dataset['qasrl_id']
-                
-                logger.info(f"Saving predictions into {output_prediction_file}...")
-                if len(df_parsed_predictions) == 0:
-                    # write empty csv with correct header
-                    header = "qasrl_id,verb_idx,verb,question,answer,answer_range,verb_form,wh,aux,subj,obj,prep,obj2,is_negated,is_passive,sentence"
-                    with open(output_prediction_file, "w") as fout:
-                        fout.write(header)
-                else:
-                    df_parsed_predictions.to_csv(output_prediction_file, index=False) 
-                wandb.save(output_prediction_file)
-        
     if training_args.push_to_hub:
         kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "summarization"}
         if data_args.dataset_name is not None:

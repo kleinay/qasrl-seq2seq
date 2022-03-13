@@ -34,6 +34,7 @@ import numpy as np
 from datasets import load_dataset, load_metric
 import pandas as pd
 
+import torch
 import transformers
 from filelock import FileLock
 from transformers import (
@@ -122,6 +123,10 @@ class ModelArguments:
                     "with private models)."
         },
     )
+    dropout_rate: Optional[float] = field(
+        default=0.1,
+        metadata={"help": "The ratio for all dropout layers."},
+    )
     top_k: Optional[int] = field(
         default=None,
         metadata={"help": "Decoding with top_k tokens."},
@@ -148,8 +153,11 @@ class DataTrainingArguments:
     """
 
     do_eval_on: Optional[str] = field(
-        default="validation", metadata={"help": "Wether to perform evaluation on 'validation' set or on 'test' set"}
+        default="validation", metadata={"help": "Whether to perform evaluation on 'validation' set or on 'test' set"}
     )
+    evaluation_protocol: Optional[str] = field(
+        default="qanom", metadata={"help": "Which evaluation protocal to run - 'qanom' or 'qasrl' (gs). In future could run both by 'qanom,qasrl' "}
+    )   
     limit_train_data: Optional[float] = field(
         default=1.0, metadata={"help": "Percentage of training samples to use during training."}
     )
@@ -507,6 +515,7 @@ def main():
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
+        dropout_rate=model_args.dropout_rate,
     )
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
@@ -776,8 +785,9 @@ def main():
             )
     # Set `evaluation_dataset` as the dataset we perform stanalone evaluation on.
     #  it can be either the `validation_dataset` or `test_dataset`, depending on `data_args.do_eval_on`
-    evaluation_dataset = validation_dataset if data_args.do_eval_on == "validation" else test_dataset
-    orig_evaluation_dataset = orig_validation_dataset if data_args.do_eval_on == "validation" else orig_test_dataset
+    if training_args.do_eval:
+        evaluation_dataset = validation_dataset if data_args.do_eval_on == "validation" else test_dataset
+        orig_evaluation_dataset = orig_validation_dataset if data_args.do_eval_on == "validation" else orig_test_dataset
 
 
     # Data collator
@@ -979,7 +989,7 @@ def main():
         invalid_pred_df = pd.DataFrame(invalid_qa_subseqs, columns=["Error-type", "output"])
         invalid_pred_df.to_csv(invalid_output_prediction_file, index=False)
         wandb.save(invalid_output_prediction_file)
-        invalid_types_relative_frequency = invalid_pred_df["Error-type"].value_counts()/len(predictions)
+        invalid_types_relative_frequency = invalid_pred_df["Error-type"].value_counts()/overall_n_qa_subseqs
         errors_log_dict = {f"invalid output QA rate - error type: {error_type}": relative_frequency
                             for error_type, relative_frequency in invalid_types_relative_frequency.items()}
         wandb.log(errors_log_dict)
@@ -1030,7 +1040,12 @@ def main():
             
             df_parsed_predictions = decode_and_parse_predictions(evaluation_dataset, predictions)
             df_gold = pd.DataFrame(orig_evaluation_dataset)
-            eval_measures = run_evaluation.run_qanom_evaluation(df_parsed_predictions, df_gold)
+            eval_protocol = data_args.evaluation_protocol
+            # TODO Future: support both evaluation protocols simultanously
+            if "qasrl" == eval_protocol:   # follow qasrl-gs protocol
+                eval_measures = run_evaluation.run_qasrl_gs_evaluation(df_parsed_predictions, df_gold)
+            if "qanom" == eval_protocol:
+                eval_measures = run_evaluation.run_qanom_evaluation(df_parsed_predictions, df_gold)
             unlabelled_arg, labelled_arg, unlabelled_role = eval_measures
             eval_measures_dict = {
                 "Unlabled Arg f1": unlabelled_arg.f1(),
@@ -1046,6 +1061,9 @@ def main():
             run_evaluation.print_evaluations(unlabelled_arg, labelled_arg, unlabelled_role)
             wandb.log(eval_measures_dict)
             results.update(eval_measures_dict) 
+            eval_fn = f"{training_args.output_dir}/evaluation_by_{eval_protocol}_protocol.txt"
+            run_evaluation.write_qasrl_evaluation_to_file(eval_fn, *eval_measures)
+            wandb.save(eval_fn)
 
 
     # Inference (Prediction on test)
@@ -1057,6 +1075,7 @@ def main():
         if do_inference_without_labels and model_args.model_type == 't5':
             # T5 decoders expect to be initialized with the pad_token
             test_dataset = test_dataset.add_column('labels', [[tokenizer.pad_token_id]] * test_dataset.num_rows)
+        
         predict_results = trainer.predict(
             test_dataset,
             metric_key_prefix="predict",
@@ -1068,20 +1087,35 @@ def main():
             data_args.max_eval_samples if data_args.max_eval_samples is not None else len(test_dataset)
         )
         metrics["predict_samples"] = min(max_test_samples, len(test_dataset))
-
         trainer.log_metrics("predict", metrics)
         trainer.save_metrics("predict", metrics)
+        prediction_token_ids = predict_results.predictions
 
+
+        # TODO Instead: run model.generate directly
+        # prediction_token_ids = []
+        # test_dataloader = trainer.get_test_dataloader(test_dataset)
+        # for test_data_batch in test_dataloader:
+        #     generated = model.generate(test_data_batch['input_ids'],
+        #                     max_length=data_args.val_max_target_length,
+        #                     num_beams=data_args.num_beams,
+        #                     return_dict_in_generate=True,
+        #                     output_scores=True,
+        #                 )
+        #     prediction_token_ids.extend(generated["sequences"])
+        
+                  
         if trainer.is_world_process_zero():
             if training_args.predict_with_generate:
-                logger.info(f"length of predict_results.predictions: {len(predict_results.predictions)}")
+                logger.info(f"length of predict_results.predictions: {len(prediction_token_ids)}")
                 predictions = tokenizer.batch_decode(
-                    predict_results.predictions, skip_special_tokens=False, clean_up_tokenization_spaces=True
+                    prediction_token_ids, skip_special_tokens=False, clean_up_tokenization_spaces=True
                 )
                 
                 # this will also save the output csv to `output_prediction_file`
                 df_parsed_predictions = decode_and_parse_predictions(test_dataset, predictions)
-                  
+        
+        
 
     if training_args.push_to_hub:
         kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "summarization"}

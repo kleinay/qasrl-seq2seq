@@ -1,4 +1,5 @@
 #%%
+from torch import dropout
 from notebook import *
 
 # Prototype - for listing the valid keyword args (given with default values)
@@ -35,75 +36,59 @@ from notebook import *
 #                     )
 
 # #%%  best joint model so far
-for model_type in ["t5"]:#, "bart"]:
-    epochs=50
+for model_type in ["t5", "bart"]:
+    epochs=30
     wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_baseline"
     full_experiment(model_type=model_type,
                         train_dataset="qanom",
                         train_epochs=epochs,
                         batch_size=12,
+                        gradient_accumulation_steps=8,
+                        learning_rate=0.001,
+                        dropout_rate=0.15,
                         # metric_for_best_model="eval_rouge1",
-                        source_prefix="Generate QAs: ",
+                        source_prefix="parse: ",
                         preprocess_input_func="input_predicate_marker",
                         use_bilateral_predicate_marker=True,
                         overwrite_output_dir=True,
-                        num_beams=5,
-                        # append_verb_form=False,
+                        num_beams=3,
+                        append_verb_form=True,
                         logging_steps=500,
                         eval_steps=500,
                         save_steps=500,
                         wandb_run_name=wandb_run_name,
                         dir_switch="qanom_baseline",
                         # qanom_joint_factor=14,
-                        description="""baseline after refactoring evaluations """,
+                        description="""baseline after refactoring evaluations and hyper-parameter tuning""",
                         # limit_train_data=0.01,
                         # limit_eval_data=0.01,
                         )
-    
-    # epochs=10
-    # wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_joint lr=.0001"
-    # full_experiment(model_type=model_type,
-    #                     train_dataset="joint_qanom",
-    #                     test_dataset="qanom",
-    #                     train_epochs=epochs,
-    #                     learning_rate=0.0001,
-    #                     batch_size=12,
-    #                     source_prefix="Generate QAs for <predicate_type> QASRL: ",
-    #                     preprocess_input_func="input_predicate_marker",
-    #                     use_bilateral_predicate_marker=True,
-    #                     overwrite_output_dir=True,
-    #                     num_beams=3,
-    #                     logging_steps=500,
-    #                     eval_steps=500,
-    #                     save_steps=500,
-    #                     wandb_run_name=wandb_run_name,
-    #                     dir_switch="joint",
-    #                     qanom_joint_factor=14,
-    #                     description="""joint lr=.0001; filtering train instances by is_verbal and not by question; metric=rouge1""",
-    #                     load_best_model_at_end=True,
-    #                     metric_for_best_model="eval_rouge1",
-    #                     ) 
-    
-    
-    # epochs = 60
-    # wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_long"
-    # full_experiment(model_type=model_type,
-    #                     train_dataset="qanom",
-    #                     test_dataset="qanom",
-    #                     train_epochs=epochs,
-    #                     batch_size=12,
-    #                     source_prefix="ask <predicate_type>: ",
-    #                     preprocess_input_func="input_predicate_marker",
-    #                     use_bilateral_predicate_marker=True,
-    #                     overwrite_output_dir=True,
-    #                     num_beams=3,
-    #                     logging_steps=500,
-    #                     wandb_run_name=wandb_run_name,
-    #                     dir_switch="joint_qanom_short-prefix",
-    #                     qanom_joint_factor=14,
-    #                     description="""shorter pred-type prefix, bilateral marker, beams=3, qanom_factor=14""",
-    #                     )
-    
+    wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_joint"
+    full_experiment(model_type=model_type,
+                        train_dataset="joint_qanom",
+                        train_epochs=epochs,
+                        batch_size=12,
+                        gradient_accumulation_steps=8,
+                        learning_rate=0.001,
+                        dropout_rate=0.15,
+                        # metric_for_best_model="eval_rouge1",
+                        source_prefix="parse <predicate_type>: ",
+                        preprocess_input_func="input_predicate_marker",
+                        use_bilateral_predicate_marker=True,
+                        overwrite_output_dir=True,
+                        num_beams=3,
+                        append_verb_form=True,
+                        logging_steps=500,
+                        eval_steps=500,
+                        save_steps=500,
+                        wandb_run_name=wandb_run_name,
+                        dir_switch="qanom_joint",
+                        qanom_joint_factor=14,
+                        description="""joint after refactoring evaluations and hyper-parameter tuning""",
+                        # limit_train_data=0.01,
+                        # limit_eval_data=0.01,
+                        )
+  
 # model_type="t5"
 # epochs=10
 # wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_exp-baseline"

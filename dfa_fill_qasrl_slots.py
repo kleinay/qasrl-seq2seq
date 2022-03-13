@@ -30,13 +30,13 @@ def dfa_fill_qasrl_slots(predicted_question: str, question_dfa: DFA) -> Optional
     lowered_question = predicted_question.lower()
     tokenized_question = lowered_question.split(" ")
     # handle '?' edge cases
-    if len(tokenized_question) == 7:
-        if tokenized_question[-1].endswith('?'):
-        # seperate '?' to be the 8th slot when there is no space before it
+    if tokenized_question[-1].endswith('?'):
+        if not tokenized_question[-1] == '?':
+            # seperate '?' to be the 8th slot when there is no space before it
             tokenized_question = tokenized_question[:-1] + [tokenized_question[-1][:-1], '?']
-        else:
-        # add '? as the 8th slot if non existent
-            tokenized_question.append('?')
+    else:
+    # add '? as the 8th slot if non existent
+        tokenized_question.append('?')
         
     slots: Optional[Slots] = _parse_token(tokenized_question, 0, {}, [], question_dfa)
 

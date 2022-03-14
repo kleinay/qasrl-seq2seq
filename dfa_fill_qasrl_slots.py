@@ -1,6 +1,5 @@
 from typing import List, Optional, Dict, Union
 
-from qasrl_gs.scripts.common import QuestionAnswer
 from seq2seq_constrained_decoding.constrained_decoding.dfa import DFA
 
 STATE_TO_SLOT = {
@@ -44,7 +43,7 @@ def dfa_fill_qasrl_slots(predicted_question: str, question_dfa: DFA) -> Optional
         return slots
 
 
-def _parse_token(tokenized_question, curr_state, slots: Slots, previous_tokens: List[str], question_dfa: DFA) -> Optional[Slots]:
+def _parse_token(tokenized_question, curr_state, slots: Slots, previous_tokens_of_slot: List[str], question_dfa: DFA) -> Optional[Slots]:
     if not(any(tokenized_question)):
         return None
     elif tokenized_question[0] == "?":
@@ -54,39 +53,22 @@ def _parse_token(tokenized_question, curr_state, slots: Slots, previous_tokens: 
             return None
 
     token = tokenized_question.pop(0)
-    success, next_state, _ = question_dfa(previous_tokens + [token])
+    slot_filler_candidate = ' '.join(previous_tokens_of_slot + [token])
+    success, next_state = question_dfa.step(curr_state, slot_filler_candidate)
     if success:
-        # Save slot
-        slots[STATE_TO_SLOT[curr_state]] = token
-
-        # Keep track of previous tokens (for next inference of DFA)
-        previous_tokens.append(token)
-
-        # Update state
-        curr_state = next_state
-
-        # Recursive call
-        return _parse_token(tokenized_question, curr_state, slots, previous_tokens, question_dfa)
+        # handle multi-word ambiguities and wildcard
+        # token can be the slot, or complete the slot with previous_tokens_of_slot, but can also be only part of the slot
+        
+        # Recursive call according to possibility that this token exhoustes the current slot 
+        slots_if_exhousted_slot = slots.copy()
+        slots_if_exhousted_slot[STATE_TO_SLOT[curr_state]] = slot_filler_candidate
+        slots_if_exhousted_slot = _parse_token(tokenized_question.copy(), next_state, slots_if_exhousted_slot, [], question_dfa)
+        if slots_if_exhousted_slot:
+            return slots_if_exhousted_slot
+        else:
+            # Recursive call according to possibility that this token has not yet exhoustes the current slot 
+            return _parse_token(tokenized_question, curr_state, slots, previous_tokens_of_slot + [token], question_dfa)
+        
     else:
-        # verb is a wildcard. In this case, it is possible this token belongs to the previous part
-        is_previous_slot_wildcard = curr_state == SLOT_TO_STATE['obj']
-        if is_previous_slot_wildcard:
-            # Remove last token and concatenate with current token
-            tokenized_question_copy = tokenized_question.copy()
-            previous_tokens_copy = previous_tokens.copy()
-            previous_token = previous_tokens_copy.pop()
-            tokenized_question_copy.insert(0, " ".join([previous_token, token]))
-
-            # Recursive call
-            slots_by_verb = _parse_token(tokenized_question_copy, SLOT_TO_STATE['verb'], slots.copy(), previous_tokens_copy, question_dfa)
-            if slots_by_verb:
-                return slots_by_verb
-
-        if not any(tokenized_question):
-            return None
-
-        # Try adding next token to current token
-        tokenized_question[0] = " ".join([token, tokenized_question[0]])
-
-        # Recursive call
-        return _parse_token(tokenized_question, curr_state, slots, previous_tokens, question_dfa)
+        # Recursive call - might be that next tokens will complete current slot to a valid filler
+        return _parse_token(tokenized_question, curr_state, slots, previous_tokens_of_slot + [token], question_dfa)

@@ -26,10 +26,10 @@ class StringsToObjectsParser:
                  tokenizer
                  ):
         self.special_tokens = special_tokens
-        self.qasrl_q_dfa: DFA = get_qasrl_question_dfa(constrain_verb=False).as_word_level()
+        self.qasrl_q_dfa: DFA = get_qasrl_question_dfa(constrain_verb=False)
         # Define qasrl_q_find_verb_dfa for finding verbs within the question
-        # self.qasrl_q_find_verb_dfa = self.qasrl_q_dfa.copy()
-        # self.qasrl_q_find_verb_dfa.accept_states = [3]    # verb slot
+        self.qasrl_q_find_verb_dfa = self.qasrl_q_dfa.copy()
+        self.qasrl_q_find_verb_dfa.accept_states = [3]    # verb slot
 
     def to_qasrl_gs_csv_format(self, predict_dataset: Dataset, predictions: List[str]) -> Tuple[List[QuestionAnswer], List[str]]:
         qasrl_predictions: List[QuestionAnswer] = []
@@ -75,7 +75,9 @@ class StringsToObjectsParser:
 
 
     def _get_question_slots(self, question_str: str) -> Dict[str, str]:
+        
         question_slots = dfa_fill_qasrl_slots(question_str.strip(), self.qasrl_q_dfa)
+
         if question_slots is None:
             raise S2SOutputError(f"QASRL-Automaton could not parse the question into slots. Predicted question: '{question_str}'", 
                                  error_type="Invalid QASRL question format")
@@ -93,7 +95,7 @@ class StringsToObjectsParser:
         words_of_q = question_str.split(" ")
         for i in range(len(words_of_q)):
             automaton_input = ' '.join(words_of_q[:i])
-            if self.qasrl_q_dfa(automaton_input)[2]:
+            if self.qasrl_q_find_verb_dfa(automaton_input)[2]:
                 return words_of_q[i]
         # verb not found
         raise S2SOutputError(f"No verb found in question. Predicted question: '{question_str}'", error_type="No verb in question") 

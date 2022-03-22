@@ -552,6 +552,8 @@ def load_and_evaluate(saved_model_path: str,
     sys.argv = args_to_send
     eval_results, run = main()
     wandb.config['test_dataset'] = test_dataset
+    wandb.config['model_type'] = model_type
+    wandb.config.update(kwargs)
     wandb.save(f"{output_dir}/*.csv")
     wandb.save(f"{output_dir}/*.json")
     wandb.save(f"{output_dir}/*.txt")

@@ -17,7 +17,7 @@ from notebook import *
 #                     fp16=True,
 #                     source_prefix="Generate QAs for <predicate_type> QASRL: ",
 #                     preprocess_input_func="input_predicate_marker",
-#                     preprocess_output_func="all_random_order",
+#                     preprocess_output_func="all_by_answer_ordering", # "", "all_random_order"
 #                     append_verb_form=True,
 #                     predicate_marker_type="generic", # or "pred_type"
 #                     use_bilateral_predicate_marker=False,
@@ -37,10 +37,10 @@ from notebook import *
 
 # #%%  best joint model so far
 for model_type in ["t5", "bart"]:
-    epochs=30
-    wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_baseline"
+    epochs=10
+    wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qasrl_baseline"
     full_experiment(model_type=model_type,
-                        train_dataset="qanom",
+                        train_dataset="qasrl",
                         train_epochs=epochs,
                         batch_size=12,
                         gradient_accumulation_steps=8,
@@ -57,37 +57,37 @@ for model_type in ["t5", "bart"]:
                         eval_steps=500,
                         save_steps=500,
                         wandb_run_name=wandb_run_name,
-                        dir_switch="qanom_baseline",
+                        dir_switch="qasrl_baseline",
                         # qanom_joint_factor=14,
-                        description="""baseline after refactoring evaluations and hyper-parameter tuning""",
+                        description="""qasrl baseline after refactoring evaluations""",
                         # limit_train_data=0.01,
                         # limit_eval_data=0.01,
                         )
-    wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_joint"
-    full_experiment(model_type=model_type,
-                        train_dataset="joint_qanom",
-                        train_epochs=epochs,
-                        batch_size=12,
-                        gradient_accumulation_steps=8,
-                        learning_rate=0.001,
-                        dropout_rate=0.15,
-                        # metric_for_best_model="eval_rouge1",
-                        source_prefix="parse <predicate_type>: ",
-                        preprocess_input_func="input_predicate_marker",
-                        use_bilateral_predicate_marker=True,
-                        overwrite_output_dir=True,
-                        num_beams=3,
-                        append_verb_form=True,
-                        logging_steps=500,
-                        eval_steps=500,
-                        save_steps=500,
-                        wandb_run_name=wandb_run_name,
-                        dir_switch="qanom_joint",
-                        qanom_joint_factor=14,
-                        description="""joint after refactoring evaluations and hyper-parameter tuning""",
-                        # limit_train_data=0.01,
-                        # limit_eval_data=0.01,
-                        )
+    # wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_joint"
+    # full_experiment(model_type=model_type,
+    #                     train_dataset="joint_qanom",
+    #                     train_epochs=epochs,
+    #                     batch_size=12,
+    #                     gradient_accumulation_steps=8,
+    #                     learning_rate=0.001,
+    #                     dropout_rate=0.15,
+    #                     # metric_for_best_model="eval_rouge1",
+    #                     source_prefix="parse <predicate_type>: ",
+    #                     preprocess_input_func="input_predicate_marker",
+    #                     use_bilateral_predicate_marker=True,
+    #                     overwrite_output_dir=True,
+    #                     num_beams=3,
+    #                     append_verb_form=True,
+    #                     logging_steps=500,
+    #                     eval_steps=500,
+    #                     save_steps=500,
+    #                     wandb_run_name=wandb_run_name,
+    #                     dir_switch="qanom_joint",
+    #                     qanom_joint_factor=14,
+    #                     description="""joint after refactoring evaluations and hyper-parameter tuning""",
+    #                     # limit_train_data=0.01,
+    #                     # limit_eval_data=0.01,
+    #                     )
   
 # model_type="t5"
 # epochs=10

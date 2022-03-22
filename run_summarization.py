@@ -946,7 +946,6 @@ def main():
     def decode_and_parse_predictions(dataset, predictions) -> pd.DataFrame:
         # assuming `predictions` is already textual, obtained by 
         #  tokenizer.batch_decode(token_ids, skip_special_tokens=False, clean_up_tokenization_spaces=True) 
-        # TODO copy from "do_predict" below
         predictions = [clean_output_seq(p) for p in predictions]
         input_seqs = [clean_output_seq(tokenizer.decode(dataset[i]['input_ids']))
                       for i in range(len(dataset))]
@@ -980,7 +979,7 @@ def main():
         predicted_QAs, invalid_qa_subseqs = strings_to_objects_parser.to_qasrl_gs_csv_format(dataset, predictions)
         
         # Log invalid output sequences
-        overall_n_qa_subseqs = len(predicted_QAs) + len(invalid_qa_subseqs)
+        overall_n_qa_subseqs = n_QAs_per_instance.sum() # len(predicted_QAs) + len(invalid_qa_subseqs)
         invalid_output_rate = len(invalid_qa_subseqs)/overall_n_qa_subseqs
         logger.info(f"Number of invalid (mal-structued) predicted output QAs: {len(invalid_qa_subseqs)} (%{100*invalid_output_rate:.1f})"
                     f"\n  Saving them into {invalid_output_prediction_file}")

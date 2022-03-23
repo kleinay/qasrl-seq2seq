@@ -1,8 +1,10 @@
 from builtins import ValueError
 from dataclasses import dataclass
-from typing import List, Literal
+from typing import List, Literal, Any
 from argparse import Namespace
 import pandas as pd
+import random
+import itertools
 
 class Preprocessor:
     def __init__(self,
@@ -13,6 +15,7 @@ class Preprocessor:
             data_args = Namespace(**data_args)
         self.data_args = data_args
         self.special_tokens = special_tokens
+        self.sample_k_permutations_per_instance = 3 
         
         self.preprocess_input_function_map = {
             "input_predicate_repeated": self.extract_inputs_predicate_repeated,
@@ -21,9 +24,12 @@ class Preprocessor:
         }
         self.preprocess_output_function_map = {
             "first_two_question_answer": self.extract_targets_only_first_two_question_answers,
-            "all_random_order": self.extract_targets_all,
-            "all_by_answer_ordering": self.extract_targets_all_by_answer_ordering,
-            # "all_permutations": preprocessor.extract_targets_with_all_permutations,
+            "permutate_sample_num_of_qas": self.extract_qa_permutations_as_qas,
+            "permutate_sample_fixed": self.extract_qa_permutations_fixed,
+            "permutate_all": self.extract_all_permutations,
+            "all_shuffled": self.extract_targets_shuffled_order,
+            "all_random_order": self.extract_targets_arbitrary_order,
+            "all_by_answer_ordering": self.extract_targets_by_answer_ordering,
             "qadiscourse_output": self.extract_qadiscourse_targets,
             }
     
@@ -50,13 +56,16 @@ class Preprocessor:
             raise ValueError(f"output preprocessing function {self.data_args.preprocess_output_func} not supported; "
                              f"options are: {list(self.preprocess_output_function_map.keys())}")
         preprocessing_function = self.preprocess_output_function_map[self.data_args.preprocess_output_func]
-        target_seq = preprocessing_function(x)
+        target_seqs = preprocessing_function(x)
         
-        if self.data_args.learn_predicate_type == "pre" and "predicate_type" in row:
-            target_seq = row["predicate_type"] + " | " + target_seq 
-        elif self.data_args.learn_predicate_type == "post" and "predicate_type" in row:
-            target_seq = target_seq + " | " + row["predicate_type"] 
-        return target_seq
+        def further_target_seq_processing(target_seq: str) -> str:
+            if self.data_args.learn_predicate_type == "pre" and "predicate_type" in row:
+                target_seq = row["predicate_type"] + " | " + target_seq 
+            elif self.data_args.learn_predicate_type == "post" and "predicate_type" in row:
+                target_seq = target_seq + " | " + row["predicate_type"] 
+            return target_seq
+        
+        return [further_target_seq_processing(seq) for seq in target_seqs]
     
     def reverse_input_preprocessing(self, processed_sentence: str) -> str:
         """
@@ -170,14 +179,58 @@ class Preprocessor:
     """
     Output Sequence preprocessing:
     """           
-    def extract_targets_all(self, x: pd.DataFrame) -> str:
+    def extract_all_permutations(self, x: pd.DataFrame) -> List[str]:
+        """
+        Extracts !n output sequences for every predicate, where n=|QAs|. 
+        Each output sequence is a permutation of the QA order. 
+        """
+        qa_reprs = [f"{q}{self.special_tokens.separator_output_question_answer}{self._flatten_answers(t)}" 
+                    for q, t in zip(x.question, x.answer)]
+        return [f"{self.special_tokens.separator_output_pairs}".join(permuted_qas)
+                for permuted_qas in itertools.permutations(qa_reprs)]
+        
+    def extract_qa_permutations_as_qas(self, x: pd.DataFrame) -> List[str]:
+        """
+        Extracts n output sequences for every predicate, where n=|QAs|. 
+        Each output sequence is sampled from the permutations of the QA order. 
+        """
+        qa_reprs = [f"{q}{self.special_tokens.separator_output_question_answer}{self._flatten_answers(t)}" 
+                    for q, t in zip(x.question, x.answer)]
+        n_permutations_to_sample = len(qa_reprs)
+        sampled_permutations = self._sample_permutations(qa_reprs, k=n_permutations_to_sample)
+        return [f"{self.special_tokens.separator_output_pairs}".join(permuted_qas)
+                for permuted_qas in sampled_permutations]
+        
+    def extract_qa_permutations_fixed(self, x: pd.DataFrame) -> List[str]:
+        """
+        Extracts k output sequences for every predicate. 
+        Each output sequence is sampled from the permutations of the QA order. 
+        """
+        qa_reprs = [f"{q}{self.special_tokens.separator_output_question_answer}{self._flatten_answers(t)}" 
+                    for q, t in zip(x.question, x.answer)]
+        n_permutations_to_sample = self.sample_k_permutations_per_instance
+        sampled_permutations = self._sample_permutations(qa_reprs, k=n_permutations_to_sample, 
+                                                         with_replacement=True)
+        return [f"{self.special_tokens.separator_output_pairs}".join(permuted_qas)
+                for permuted_qas in sampled_permutations]
+        
+    def extract_targets_arbitrary_order(self, x: pd.DataFrame) -> str:
         """
         Extracts ((question, answers), ...)
         """
-        qa_reprs = [f"{q}{self.special_tokens.separator_output_question_answer}{self._flatten_targets(t)}" for q, t in zip(x.question, x.answer)]
-        return f"{self.special_tokens.separator_output_pairs}".join(qa_reprs)
+        qa_reprs = [f"{q}{self.special_tokens.separator_output_question_answer}{self._flatten_answers(t)}" for q, t in zip(x.question, x.answer)]
+        return [f"{self.special_tokens.separator_output_pairs}".join(qa_reprs)]
+    
+    def extract_targets_shuffled_order(self, x: pd.DataFrame) -> str:
+        """
+        Extracts ((question, answers), ...) in a randomized order.
+        In order to take effect, one also needs to repeat preprocessing every epoch... 
+        """
+        qa_reprs = [f"{q}{self.special_tokens.separator_output_question_answer}{self._flatten_answers(t)}" for q, t in zip(x.question, x.answer)]
+        random.shuffle(qa_reprs)
+        return [f"{self.special_tokens.separator_output_pairs}".join(qa_reprs)]
 
-    def extract_targets_all_by_answer_ordering(self, x: pd.DataFrame) -> str:
+    def extract_targets_by_answer_ordering(self, x: pd.DataFrame) -> str:
         """
         Extracts ((question, answers), ...)
         """
@@ -187,36 +240,37 @@ class Preprocessor:
             q,a,ranges=triplet
             return min(ranges) if ranges else 0
         qas = sorted(qas, key=sort_by_range)
-        qa_reprs = [f"{q}{self.special_tokens.separator_output_question_answer}{self._flatten_targets(t)}" for q, t, _ in qas]
-        return f"{self.special_tokens.separator_output_pairs}".join(qa_reprs)
+        qa_reprs = [f"{q}{self.special_tokens.separator_output_question_answer}{self._flatten_answers(t)}" for q, t, _ in qas]
+        return [f"{self.special_tokens.separator_output_pairs}".join(qa_reprs)]
      
     def extract_targets_only_answers(self, x: pd.DataFrame) -> str:
         """
         Extracts (answer, answer, ...)
         """
 
-        return f"{self.special_tokens.separator_output_answers}".join([f"{self._flatten_targets(t)}" for q, t in zip(x.question, x.answer)])
+        return [f"{self.special_tokens.separator_output_answers}".join([f"{self._flatten_answers(t)}" 
+                                                                       for q, t in zip(x.question, x.answer)])]
 
     def extract_targets_only_questions(self, x: pd.DataFrame) -> str:
         """
         Extracts (question, question, ...)
         """
 
-        return f"{self.special_tokens.separator_output_questions}".join([f"{q}" for q, t in zip(x.question, x.answer)])
+        return [f"{self.special_tokens.separator_output_questions}".join([f"{q}" for q, t in zip(x.question, x.answer)])]
 
     def extract_targets_only_questions_first_word(self, x: pd.DataFrame) -> str:
         """
         Extracts (question, question, ...)
         """
 
-        return f"{self.special_tokens.separator_output_questions}".join([f"{q.split(' ')[0]}" for q, t in zip(x.question, x.answer)])
+        return [f"{self.special_tokens.separator_output_questions}".join([f"{q.split(' ')[0]}" for q, t in zip(x.question, x.answer)])]
 
     def extract_targets_only_first_two_question_answers(self, x: pd.DataFrame) -> str:
         """
         Extracts ((question, answer), (question, answer))
         """
 
-        return f"{self.special_tokens.separator_output_pairs}".join([f"{q}{self.special_tokens.separator_output_question_answer}{t[0]}" for q, t in list(zip(x.question, x.answer))[:2]])
+        return [f"{self.special_tokens.separator_output_pairs}".join([f"{q}{self.special_tokens.separator_output_question_answer}{t[0]}" for q, t in list(zip(x.question, x.answer))[:2]])]
 
     def extract_targets_single(self, x: pd.DataFrame) -> str:
         """
@@ -225,11 +279,22 @@ class Preprocessor:
 
         x = x.iloc[0]
 
-        return str([f"{q}{self.special_tokens.separator_output_question_answer}{t[0]}" for q, t in zip([x.question], [x.answer])])
+        return [str([f"{q}{self.special_tokens.separator_output_question_answer}{t[0]}" for q, t in zip([x.question], [x.answer])])]
 
     def extract_qadiscourse_targets(self, x: pd.DataFrame) -> str:
         #TODO
         pass
 
-    def _flatten_targets(self, targets: List[str]) -> str:
+    """ Helpers """
+
+    def _flatten_answers(self, targets: List[str]) -> str:
         return f"{self.special_tokens.separator_output_answers}".join(targets)
+    
+    def _sample_permutations(self, lst: List[Any], k: int, with_replacement = False) -> List[List[Any]]:
+        " Return a sample of `k` random permutations of `lst` "
+        permutations = list(itertools.permutations(lst))
+        if not with_replacement:
+            k = min(k, len(permutations))
+            return random.sample(permutations, k=k)
+        else:
+            return random.choices(permutations, k=k)

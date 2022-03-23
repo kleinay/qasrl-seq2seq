@@ -18,6 +18,7 @@ Fine-tuning the library models for sequence to sequence.
 """
 # You can also adapt this script on your own sequence to sequence task. Pointers for this are left as comments.
 from argparse import Namespace
+import itertools
 import json
 import logging
 import os
@@ -57,7 +58,8 @@ from transformers.utils.versions import require_version
 from preprocessing import Preprocessor
 from pipeline import get_markers_for_model
 from qasrl_gs.scripts.common import QuestionAnswer
-from utils import setup_wandb, replaceKeys, str2num, without_prefix, without_suffix
+from utils import (df_to_row_list, setup_wandb, replaceKeys, stack_rows, str2num, 
+                   without_prefix, without_suffix, duplicate_by_per_element_factor)
 import run_evaluation
 
 check_min_version("4.10.0.dev0")
@@ -639,12 +641,18 @@ def main():
                             "verb_form": verb_form, "is_verbal": is_verbal, "predicate_type": pred_type} 
                            for input, predicate, question, answer, answer_range, predicate_idx, qasrl_id, verb_form, is_verbal, pred_type in 
                            zip(inputs, predicates, questions, answers, answer_ranges, predicate_indices, qasrl_ids, verb_forms, is_verbals, pred_types)
-                           if is_verbal # TODO change to is_verbal     # Don't train on non-predicates
+                           if is_verbal     # Don't train on non-predicates
                            ])     
-
+        # df is QA-level, but seq2seq would be on predicate-level, so grouping by predicate
         grouped_df = df.groupby(['sentence', 'predicate_idx'])
         preprocessed_inputs = grouped_df.apply(preprocessor.preprocess_input).tolist()
-        targets = grouped_df.apply(preprocessor.preprocess_output).tolist()
+        # let's change the output of `preprocess_output` to be a tuple of output sequences that
+        #  a matched with this input example (predicate). 
+        targets_grouped_by_predicate = grouped_df.apply(preprocessor.preprocess_output).tolist()
+        predicate_level_to_seq2seq_factor = [len(g) for g in targets_grouped_by_predicate]  # predicate duplication factor 
+        targets = list(itertools.chain(*targets_grouped_by_predicate))  # flatten
+        # make input-seqs list same length as output-seqs list
+        preprocessed_inputs = duplicate_by_per_element_factor(preprocessed_inputs, predicate_level_to_seq2seq_factor)
         
         # Tokenizing the input sequences
         model_inputs = tokenizer(preprocessed_inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
@@ -662,10 +670,13 @@ def main():
         model_inputs["labels"] = labels["input_ids"]
         # We can take index 0 because of the group by all values have the same predicate
         predicate_level_df = grouped_df.apply(lambda x: x.iloc[0])
-        model_inputs["predicate"] = predicate_level_df['predicate'].tolist()
-        model_inputs["predicate_idx"] = predicate_level_df['predicate_idx'].tolist()
-        model_inputs["sentence"] = predicate_level_df['sentence'].tolist()
-        model_inputs["qasrl_id"] = predicate_level_df['qasrl_id'].tolist()
+        predicate_level_rows = df_to_row_list(predicate_level_df)
+        seq2seq_level_rows = duplicate_by_per_element_factor(predicate_level_rows, predicate_level_to_seq2seq_factor)
+        seq2seq_level_df = stack_rows(seq2seq_level_rows)
+        model_inputs["predicate"] = seq2seq_level_df['predicate'].tolist()
+        model_inputs["predicate_idx"] = seq2seq_level_df['predicate_idx'].tolist()
+        model_inputs["sentence"] = seq2seq_level_df['sentence'].tolist()
+        model_inputs["qasrl_id"] = seq2seq_level_df['qasrl_id'].tolist()
         return model_inputs
     
     def preprocess_for_inference(examples):

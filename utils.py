@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional, Union, Iterable, List, Any
 import wandb
 import pandas as pd
 
@@ -49,3 +49,21 @@ def without_suffix(s: str, suffix: str) -> str:
     if not suffix: return s
     return s[:-len(suffix)] if s.endswith(suffix) else s
  
+def duplicate_by_per_element_factor(lst: Iterable[Any], factors: Iterable[int]):
+    """ Returns a list where each element `lst[i]` is repeated `factors[i]` times. 
+    Note:
+    len(factors) must be == len(lst).
+    Example:
+    duplicate_by_per_element_factor(["a", "b", "c"], [2,3,1]) -> ['a', 'a', 'b', 'b', 'b', 'c'] 
+    """
+    ret = []
+    for element, factor in zip(lst, factors):
+        ret.extend([element] * factor)
+    return ret
+
+def df_to_row_list(df: pd.DataFrame) -> List[pd.Series]:
+    "Return the list of rows of the `df` "
+    return list(list(zip(*df.iterrows()))[1])
+
+def stack_rows(rows: Iterable[pd.Series], ignore_index=True) -> pd.DataFrame:
+    return pd.concat(rows, ignore_index=ignore_index, axis=1).T

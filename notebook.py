@@ -457,7 +457,9 @@ def load_and_predict(saved_model_path: str,
         kwargs["per_device_eval_batch_size"] = kwargs["batch_size"]
         kwargs.pop("batch_size")    
     
-    kwargs_not_to_be_sent = ('description', 'train_dataset', 'test_dataset', 'train_epochs', 'wandb_run_name', 'output_dir')
+    kwargs_not_to_be_sent = ('description', 'train_dataset', 'test_dataset', 
+                             'train_epochs', 'wandb_run_name', 'output_dir',
+                             'qanom_joint_factor', 'dir_switch')
     kwargs = utils.dict_without_keys(kwargs, kwargs_not_to_be_sent)
     
     # add model name and model-specific args (model_type, source_perfix)
@@ -533,7 +535,9 @@ def load_and_evaluate(saved_model_path: str,
     kwargs["do_eval_on"] = "validation" if do_eval_on_dev else "test"
 
     # remove args from `experiment_kwargs` and from defaults those kwargs that we want to override here or don't need fro evaluation
-    kwargs_not_to_be_sent = ('description', 'train_dataset', 'test_dataset', 'train_epochs', 'wandb_run_name', 'output_dir', 'qanom_joint_factor', 'dir_switch')
+    kwargs_not_to_be_sent = ('description', 'train_dataset', 'test_dataset', 
+                             'train_epochs', 'wandb_run_name', 'output_dir', 
+                             'qanom_joint_factor', 'dir_switch')
     kwargs = utils.dict_without_keys(kwargs, kwargs_not_to_be_sent)
         
     model_dir=saved_model_path  

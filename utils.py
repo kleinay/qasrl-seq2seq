@@ -1,6 +1,8 @@
 from typing import Optional, Union, Iterable, List, Any
 import wandb
 import pandas as pd
+import itertools
+import torch
 
 
 def setup_wandb(use_wandb: bool, wandb_run_name: str):
@@ -67,3 +69,25 @@ def df_to_row_list(df: pd.DataFrame) -> List[pd.Series]:
 
 def stack_rows(rows: Iterable[pd.Series], ignore_index=True) -> pd.DataFrame:
     return pd.concat(rows, ignore_index=ignore_index, axis=1).T
+
+def listSplit(lst, delimeterElement):
+    " as str.split(); return a splitted list (list of sub-lists), splitted by the delimeter. "
+    return [list(y) 
+            for x, y in itertools.groupby(lst, lambda z: z == delimeterElement) 
+            if not x]
+
+def all_indices(lst: Iterable[Any], element: Any) -> List[int]:
+    " Return a list of all indices where `element` occur in `lst`" 
+    return [i for i,e in enumerate(lst) if e==element]
+
+def split_by_indices(lst: List[Any], sep_indices: List[int]) -> List[List[Any]]:
+    " Split `lst` to a list of sub-lists using indices of separators"
+    sublists = []
+    seps = [-1] + sep_indices + [len(lst)]
+    for i in range(len(seps)-1):
+        sublists.append(lst[seps[i]+1:seps[i+1]])
+    return sublists 
+
+def strip_sequence(seq: torch.Tensor, val_to_strip: int = 0) -> torch.Tensor:
+    return seq[seq!=val_to_strip]
+    

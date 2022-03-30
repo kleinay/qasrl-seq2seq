@@ -58,6 +58,7 @@ from transformers.utils.versions import require_version
 from preprocessing import Preprocessor
 from pipeline import get_markers_for_model
 from qasrl_gs.scripts.common import QuestionAnswer
+import utils
 from utils import (df_to_row_list, setup_wandb, replaceKeys, stack_rows, str2num, 
                    without_prefix, without_suffix, duplicate_by_per_element_factor)
 import run_evaluation
@@ -1024,28 +1025,141 @@ def main():
         return df_parsed_predictions
     
     
+    def predict_using_generate(test_dataset):
+        " run model.generate directly, to extract internal information "
+        records = []  # TODO for research
+        prediction_token_ids = []
+        test_dataloader = trainer.get_test_dataloader(test_dataset)
+        sep_id = tokenizer.convert_tokens_to_ids(special_tokens_constants.separator_output_pairs)
+        pad_id = tokenizer.pad_token_id
+        eos_id = tokenizer.eos_token_id
+        num_return_sequences = data_args.num_beams 
+        for test_data_batch in test_dataloader:
+            input_sequences = test_data_batch['input_ids'] 
+            eval_batch_size = input_sequences.shape[0]
+            generated = model.generate(input_sequences.to(model.device),
+                            max_length=data_args.val_max_target_length,
+                            num_beams=data_args.num_beams,
+                            num_return_sequences=num_return_sequences,
+                            return_dict_in_generate=True,
+                            output_scores=True,
+                            # diversity params
+                            # num_beam_groups=num_return_sequences, diversity_penalty=2.0,
+                            # do_sample=True,
+                        )
+            batch_predicted = generated["sequences"].detach().cpu()
+            n_seqs_in_batch, seq_length = batch_predicted.shape # n_seqs_in_batch = eval_batch_size * num_return_sequences
+            # Take first beam per instance for predictions 
+            batch_predicted = batch_predicted.reshape(eval_batch_size, num_return_sequences, seq_length)[:,0,:]
+            prediction_token_ids.extend(batch_predicted)
+            
+            
+            # "Meta-beam"
+            # Process to analyze data of token-probability for all beams for all dev instances 
+            sequences = generated["sequences"]  # (eval_batch_size * num_return_sequences, seq_length)
+            scores = torch.stack(generated["scores"]) # (seq_length (-1 ?), eval_batch_size * num_return_sequences, vocab_size)
+            sequences_scores = generated["sequences_scores"] # (eval_batch_size * num_return_sequences)
+            # align dimensions
+            sequences = sequences.reshape(eval_batch_size, num_return_sequences, seq_length)
+            sequences_scores = sequences_scores.reshape(eval_batch_size, num_return_sequences)
+            # Debug Note: sometimes the sequence-length axis may have a mismatch between `scores`
+            #  and `sequences` - such that `scores` is provided with a sequence shorter by 1 than `sequences`.
+            # The reason mentioned here (https://discuss.huggingface.co/t/scores-in-generate/3450) is that
+            #  "the first token, the `decoder_start_token_id` is not generated, meaning that no scores can be calculated".   
+            # But there are some batches where len(scores) == seq_length (from `sequences.shape[-1]`), 
+            #  and I can't understand why. TODO understand the meaning of this phenomena. 
+            # Note: From looking at examples, scores[0] is always full with -100000000 for non-first-beam sequences (but regular for first beams).
+            # Meantime if where there is a mismatch, remove last token of all `sequences` (minimal harm- removes <EOS> of longest sequence in batch)
+            if len(scores) == seq_length-1:
+                sequences = sequences[:,:,:-1]
+                seq_length = seq_length-1
+            vocab_size = scores.shape[2]
+            scores = scores.transpose(0,1)
+            scores = scores.reshape(eval_batch_size, num_return_sequences, seq_length, vocab_size)
+          
+            # Use `sequences` to index the selected-tokens scores from `scores`
+            #  and save them to record       
+            bch_token_scores = []     
+            for bch_idx in range(eval_batch_size):
+                ins_token_scores = []
+                for beam_idx in range(num_return_sequences):
+                    seq_token_scores = scores[bch_idx,beam_idx][range(seq_length), sequences[bch_idx,beam_idx]]    
+                    ins_token_scores.append(seq_token_scores)
+                ins_token_scores = torch.stack(ins_token_scores)
+                bch_token_scores.append(ins_token_scores)
+            bch_token_scores = torch.stack(bch_token_scores) # (eval_batch_size, num_return_sequences, seq_length)
+            
+            # Split each sequence to subsequences (QAs) and compute joint-probability (sum-of-scores) for each
+            for bch_idx, (ins_token_scores, ins_sequences) in enumerate(zip(bch_token_scores, sequences)):
+                ins_subsequences, ins_subseq_tok_scores, ins_subseq_scores = [], [], []
+                # mainly for debug, research and investigation:
+                ins_decoded_qas = []
+                ins_subseq_mean_scores = []
+                ins_subseq_idxs = []
+                # prepare information of each beam seprately
+                for beam_token_scores, beam_sequence in zip(ins_token_scores, ins_sequences):
+                    sep_indices = utils.all_indices(beam_sequence, sep_id)
+                    subseqs_indices = utils.split_by_indices(range(seq_length), sep_indices)
+                    subsequences_info = [   [(beam_sequence[idx].cpu().item(), beam_token_scores[idx].cpu().item(), idx) 
+                                             for idx in subseq_indices 
+                                             if beam_sequence[idx] not in [pad_id, eos_id] ]
+                                         for subseq_indices in subseqs_indices]
+                    # each of the three list-of-lists have the same "shape" and correspond to subsequences information
+                    subsequences, subseqs_tok_scores, subseqs_indices = zip(*[zip(*subinf) for subinf in subsequences_info])
+                    subseqs_sum_scores = [sum(subseq_tok_scores) for subseq_tok_scores in subseqs_tok_scores] 
+                    subseqs_mean_scores = [np.mean(subseq_tok_scores) for subseq_tok_scores in subseqs_tok_scores] 
+                    # save to aggregate over all beams of instances 
+                    ins_subsequences.append(subsequences)
+                    ins_subseq_tok_scores.append(subseqs_tok_scores)
+                    ins_subseq_scores.append(subseqs_sum_scores)    # the total score of a subsequence (i.e. a QA)
+                    ins_subseq_mean_scores.append(subseqs_mean_scores)    # the total score of a subsequence (i.e. a QA)
+                    ins_subseq_idxs.append(subseqs_indices)    # the total score of a subsequence (i.e. a QA)
+                    ins_decoded_qas.append([tokenizer.decode(sub, skip_special_tokens=False) 
+                                            for sub in subsequences])
+                
+                # collect QA infos 
+                input_seq: str = clean_output_seq(tokenizer.decode(input_sequences[bch_idx]))
+                record = {"input": input_seq,
+                          "sequence-scores": sequences_scores[bch_idx].tolist(),
+                          "subsequences": ins_subsequences,
+                          "subsequences-tok-idxs": ins_subseq_idxs,
+                          "subsequences-tok-scores": ins_subseq_tok_scores,
+                          "subsequences-scores": ins_subseq_scores,
+                          "subsequences-mean-scores": ins_subseq_mean_scores,
+                          "QAs": ins_decoded_qas
+                          }
+                records.append(record)
+            
+        with open("subsequences_info.json", "w") as fout:
+            json.dump(records, fout)
+            
+        return prediction_token_ids
+    
+    
     results = {}
     if training_args.do_eval:
         _clean_mem()
         logger.info("*** Evaluate ***")
 
-        evaluation_predict_results = trainer.predict(
-            evaluation_dataset,
-            metric_key_prefix="eval",
-            max_length=data_args.val_max_target_length,
-            num_beams=data_args.num_beams,
-        )
-        metrics = evaluation_predict_results.metrics
-        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(evaluation_dataset)
-        metrics["eval_samples"] = min(max_eval_samples, len(evaluation_dataset))
-
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
+        # evaluation_predict_results = trainer.predict(
+        #     evaluation_dataset,
+        #     metric_key_prefix="eval",
+        #     max_length=data_args.val_max_target_length,
+        #     num_beams=data_args.num_beams,
+        # )
+        # metrics = evaluation_predict_results.metrics
+        # max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(evaluation_dataset)
+        # metrics["eval_samples"] = min(max_eval_samples, len(evaluation_dataset))
+        # trainer.log_metrics("eval", metrics)
+        # trainer.save_metrics("eval", metrics)    
+        # prediction_token_ids = evaluation_predict_results.predictions
+        
+        prediction_token_ids = predict_using_generate(evaluation_dataset)
         
         if trainer.is_world_process_zero():
-            logger.info(f"length of predictions: {len(evaluation_predict_results.predictions)}")
+            logger.info(f"length of predictions: {len(prediction_token_ids)}")
             predictions = tokenizer.batch_decode(
-                evaluation_predict_results.predictions, skip_special_tokens=False, clean_up_tokenization_spaces=True
+                prediction_token_ids, skip_special_tokens=False, clean_up_tokenization_spaces=True
             )
             
             df_parsed_predictions = decode_and_parse_predictions(evaluation_dataset, predictions)
@@ -1086,34 +1200,22 @@ def main():
             # T5 decoders expect to be initialized with the pad_token
             test_dataset = test_dataset.add_column('labels', [[tokenizer.pad_token_id]] * test_dataset.num_rows)
         
-        predict_results = trainer.predict(
-            test_dataset,
-            metric_key_prefix="predict",
-            max_length=data_args.val_max_target_length,
-            num_beams=data_args.num_beams,
-        )
-        metrics = predict_results.metrics
-        max_test_samples = (
-            data_args.max_eval_samples if data_args.max_eval_samples is not None else len(test_dataset)
-        )
-        metrics["predict_samples"] = min(max_test_samples, len(test_dataset))
-        trainer.log_metrics("predict", metrics)
-        trainer.save_metrics("predict", metrics)
-        prediction_token_ids = predict_results.predictions
+        # predict_results = trainer.predict(
+        #     test_dataset,
+        #     metric_key_prefix="predict",
+        #     max_length=data_args.val_max_target_length,
+        #     num_beams=data_args.num_beams,
+        # )
+        # metrics = predict_results.metrics
+        # max_test_samples = (
+        #     data_args.max_eval_samples if data_args.max_eval_samples is not None else len(test_dataset)
+        # )
+        # metrics["predict_samples"] = min(max_test_samples, len(test_dataset))
+        # trainer.log_metrics("predict", metrics)
+        # trainer.save_metrics("predict", metrics)
+        # prediction_token_ids = predict_results.predictions
 
-
-        # TODO Instead: run model.generate directly
-        # prediction_token_ids = []
-        # test_dataloader = trainer.get_test_dataloader(test_dataset)
-        # for test_data_batch in test_dataloader:
-        #     generated = model.generate(test_data_batch['input_ids'],
-        #                     max_length=data_args.val_max_target_length,
-        #                     num_beams=data_args.num_beams,
-        #                     return_dict_in_generate=True,
-        #                     output_scores=True,
-        #                 )
-        #     prediction_token_ids.extend(generated["sequences"])
-        
+        prediction_token_ids = predict_using_generate(test_dataset)
                   
         if trainer.is_world_process_zero():
             if training_args.predict_with_generate:

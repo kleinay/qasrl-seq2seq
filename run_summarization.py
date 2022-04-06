@@ -62,6 +62,8 @@ import utils
 from utils import (df_to_row_list, setup_wandb, replaceKeys, stack_rows, str2num, 
                    without_prefix, without_suffix, duplicate_by_per_element_factor)
 import run_evaluation
+import meta_beam
+from custom_trainer import CustomSeq2SeqTrainer
 
 check_min_version("4.10.0.dev0")
 
@@ -130,6 +132,9 @@ class ModelArguments:
         default=0.1,
         metadata={"help": "The ratio for all dropout layers."},
     )
+    
+    # Inference Parameters
+    
     top_k: Optional[int] = field(
         default=None,
         metadata={"help": "Decoding with top_k tokens."},
@@ -138,9 +143,32 @@ class ModelArguments:
         default=None,
         metadata={"help": "Decoding using the top_p algorithm (0 < p <= 1)."},
     )
+    temperature: Optional[float] = field(
+        default=None,
+        metadata={"help": "Generation temperature - The value used to module the next token probabilities. Low (<1) is more spiky, high (>1) is more flat."},
+    )
+    do_sample: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to use sampling during inference"},
+    )
+    length_penalty: Optional[float] = field(
+        default=None,
+        metadata={"help": """Exponential penalty to the length. 
+                  1.0 means no penalty. Set to values < 1.0 in order to encourage the model to generate shorter sequences, 
+                  to a value > 1.0 in order to encourage the model to produce longer sequences."""},
+    )
+    no_repeat_ngram_size: Optional[int] = field(
+        default=None,
+        metadata={"help": """If set to int > 0, all ngrams of that size can only occur once."""},
+    )
     num_beam_groups: Optional[int] = field(
         default=None,
         metadata={"help": "Number of groups to divide `num_beams` into in order to ensure diversity among different groups of beams."},
+    )
+    diversity_penalty: Optional[float] = field(
+        default=None,
+        metadata={"help": """This value is subtracted from a beam’s score if it generates a token same as any beam from other group at a particular time. 
+                  Note that diversity_penalty is only effective if `group_beam_search` is enabled."""},
     )
     constrain_generation: bool = field(
         default=False,
@@ -597,7 +625,7 @@ def main():
     preprocessor = Preprocessor(data_args, special_tokens_constants)
 
     # Preprocssing for train and eval - preparing both input sequence and expected output sequence ("labels")
-    def preprocess_function(examples):
+    def preprocess_function(examples, is_training: bool = False):
         inputs = examples[text_column]
         batch_size = len(inputs)
         # in 2015 dataset the column is predicate, and in 2020 it is verb
@@ -647,9 +675,11 @@ def main():
         # df is QA-level, but seq2seq would be on predicate-level, so grouping by predicate
         grouped_df = df.groupby(['sentence', 'predicate_idx'])
         preprocessed_inputs = grouped_df.apply(preprocessor.preprocess_input).tolist()
-        # let's change the output of `preprocess_output` to be a tuple of output sequences that
-        #  a matched with this input example (predicate). 
-        targets_grouped_by_predicate = grouped_df.apply(preprocessor.preprocess_output).tolist()
+        # `preprocess_output` returns tuple of output sequences that
+        #   are matched with this input example (predicate). 
+        # For non-training, this would always be a 1-tuple per instance.
+        preprocess_output_func = lambda x: preprocessor.preprocess_output(x, is_training=is_training)
+        targets_grouped_by_predicate = grouped_df.apply(preprocess_output_func).tolist()
         predicate_level_to_seq2seq_factor = [len(g) for g in targets_grouped_by_predicate]  # predicate duplication factor 
         targets = list(itertools.chain(*targets_grouped_by_predicate))  # flatten
         # make input-seqs list same length as output-seqs list
@@ -895,7 +925,7 @@ def main():
     # training_args.eval_steps = 500       
 
     # Initialize our Trainer
-    trainer = Seq2SeqTrainer(
+    trainer = CustomSeq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
@@ -931,18 +961,27 @@ def main():
     # Prepare constrained generation
     if model_args.constrain_generation:
         from seq2seq_constrained_decoding.constrained_decoding.dfa import DFA
-        from seq2seq_constrained_decoding.constrained_decoding.qasrl_constrained_decoding import get_qasrl_full_sequence_dfa
+        from seq2seq_constrained_decoding.constrained_decoding.qasrl_constrained_decoding import (
+            get_qasrl_full_sequence_dfa, set_as_redundance_answer_disposer_dfa)
         from seq2seq_constrained_decoding.constrained_decoding.dfa_decoding import set_decoding_to_dfa_constrained
         
         # just naviely for testing 
         def dfa_factory(token_ids): 
             sentence = tokenizer.decode(token_ids, skip_special_tokens=True)
             sentence = preprocessor.reverse_input_preprocessing(sentence)
-            return get_qasrl_full_sequence_dfa(sentence, tokenizer, special_tokens_constants)
+            qasrl_sequence_dfa = get_qasrl_full_sequence_dfa(sentence, tokenizer, special_tokens_constants)
+            # on top, constrain the generation to not repeat tokens in answers for the same question
+            # set_as_redundance_answer_disposer_dfa(qasrl_sequence_dfa, special_tokens_constants, tokenizer, convert_to_word_ids=True)
+            return qasrl_sequence_dfa
         # enable special dfa-constrained beam search
         logger.info("Applying constrained decoding...")
         set_decoding_to_dfa_constrained(model, dfa_factory=dfa_factory, tokenizer=tokenizer)
         data_args.num_beams = data_args.num_beams or 2 # must enable beam search to utilize DFA-constrained decoding
+    
+    # prepare generation parameters - kwargs for `model.generate`
+    generate_kwargs_keys = ('num_beams', 'num_beam_groups', 'diversity_penalty', 'length_penalty',
+                            'temperature', 'top_p', 'top_k', 'do_sample', 'no_repeat_ngram_size', ) 
+    generate_kwargs = {key: data_args.__dict__[key] for key in generate_kwargs_keys if key in data_args.__dict__}
     
     # file names for saving predictions - raw, validly parsed, & invalids   
     if "output_file" in training_args.__dict__:
@@ -997,7 +1036,7 @@ def main():
                     f"\n  Saving them into {invalid_output_prediction_file}")
         wandb.log({"invalid output QA rate overall": invalid_output_rate})
         wandb.run.summary["invalid output QA rate overall"] = invalid_output_rate
-        invalid_pred_df = pd.DataFrame(invalid_qa_subseqs, columns=["Error-type", "output"])
+        invalid_pred_df = pd.DataFrame(invalid_qa_subseqs, columns=["Error-type", "output", "input-sentence"])
         invalid_pred_df.to_csv(invalid_output_prediction_file, index=False)
         wandb.save(invalid_output_prediction_file)
         invalid_types_relative_frequency = invalid_pred_df["Error-type"].value_counts()/overall_n_qa_subseqs
@@ -1027,24 +1066,23 @@ def main():
     
     def predict_using_generate(test_dataset):
         " run model.generate directly, to extract internal information "
-        records = []  # TODO for research
         prediction_token_ids = []
         test_dataloader = trainer.get_test_dataloader(test_dataset)
-        sep_id = tokenizer.convert_tokens_to_ids(special_tokens_constants.separator_output_pairs)
-        pad_id = tokenizer.pad_token_id
-        eos_id = tokenizer.eos_token_id
-        num_return_sequences = data_args.num_beams 
+        num_return_sequences = data_args.num_beams or 1
+        metabeamer = meta_beam.MetaBeam(data_args, tokenizer, special_tokens_constants, clean_output_seq)
         for test_data_batch in test_dataloader:
             input_sequences = test_data_batch['input_ids'] 
             eval_batch_size = input_sequences.shape[0]
             generated = model.generate(input_sequences.to(model.device),
                             max_length=data_args.val_max_target_length,
-                            num_beams=data_args.num_beams,
-                            num_return_sequences=num_return_sequences,
                             return_dict_in_generate=True,
                             output_scores=True,
-                            # diversity params
-                            # num_beam_groups=num_return_sequences, diversity_penalty=2.0,
+                            # num_beams=data_args.num_beams,
+                            num_return_sequences=num_return_sequences,
+                            # Inference parameters
+                            **generate_kwargs
+                            # num_beam_groups=num_return_sequences, 
+                            # diversity_penalty=2.0,
                             # do_sample=True,
                         )
             batch_predicted = generated["sequences"].detach().cpu()
@@ -1056,82 +1094,11 @@ def main():
             
             # "Meta-beam"
             # Process to analyze data of token-probability for all beams for all dev instances 
-            sequences = generated["sequences"]  # (eval_batch_size * num_return_sequences, seq_length)
-            scores = torch.stack(generated["scores"]) # (seq_length (-1 ?), eval_batch_size * num_return_sequences, vocab_size)
-            sequences_scores = generated["sequences_scores"] # (eval_batch_size * num_return_sequences)
-            # align dimensions
-            sequences = sequences.reshape(eval_batch_size, num_return_sequences, seq_length)
-            sequences_scores = sequences_scores.reshape(eval_batch_size, num_return_sequences)
-            # Debug Note: sometimes the sequence-length axis may have a mismatch between `scores`
-            #  and `sequences` - such that `scores` is provided with a sequence shorter by 1 than `sequences`.
-            # The reason mentioned here (https://discuss.huggingface.co/t/scores-in-generate/3450) is that
-            #  "the first token, the `decoder_start_token_id` is not generated, meaning that no scores can be calculated".   
-            # But there are some batches where len(scores) == seq_length (from `sequences.shape[-1]`), 
-            #  and I can't understand why. TODO understand the meaning of this phenomena. 
-            # Note: From looking at examples, scores[0] is always full with -100000000 for non-first-beam sequences (but regular for first beams).
-            # Meantime if where there is a mismatch, remove last token of all `sequences` (minimal harm- removes <EOS> of longest sequence in batch)
-            if len(scores) == seq_length-1:
-                sequences = sequences[:,:,:-1]
-                seq_length = seq_length-1
-            vocab_size = scores.shape[2]
-            scores = scores.transpose(0,1)
-            scores = scores.reshape(eval_batch_size, num_return_sequences, seq_length, vocab_size)
-          
-            # Use `sequences` to index the selected-tokens scores from `scores`
-            #  and save them to record       
-            bch_token_scores = []     
-            for bch_idx in range(eval_batch_size):
-                ins_token_scores = []
-                for beam_idx in range(num_return_sequences):
-                    seq_token_scores = scores[bch_idx,beam_idx][range(seq_length), sequences[bch_idx,beam_idx]]    
-                    ins_token_scores.append(seq_token_scores)
-                ins_token_scores = torch.stack(ins_token_scores)
-                bch_token_scores.append(ins_token_scores)
-            bch_token_scores = torch.stack(bch_token_scores) # (eval_batch_size, num_return_sequences, seq_length)
+            # if num_return_sequences > 1:
+            #     metabeamer.collect_info(generated, input_sequences)
             
-            # Split each sequence to subsequences (QAs) and compute joint-probability (sum-of-scores) for each
-            for bch_idx, (ins_token_scores, ins_sequences) in enumerate(zip(bch_token_scores, sequences)):
-                ins_subsequences, ins_subseq_tok_scores, ins_subseq_scores = [], [], []
-                # mainly for debug, research and investigation:
-                ins_decoded_qas = []
-                ins_subseq_mean_scores = []
-                ins_subseq_idxs = []
-                # prepare information of each beam seprately
-                for beam_token_scores, beam_sequence in zip(ins_token_scores, ins_sequences):
-                    sep_indices = utils.all_indices(beam_sequence, sep_id)
-                    subseqs_indices = utils.split_by_indices(range(seq_length), sep_indices)
-                    subsequences_info = [   [(beam_sequence[idx].cpu().item(), beam_token_scores[idx].cpu().item(), idx) 
-                                             for idx in subseq_indices 
-                                             if beam_sequence[idx] not in [pad_id, eos_id] ]
-                                         for subseq_indices in subseqs_indices]
-                    # each of the three list-of-lists have the same "shape" and correspond to subsequences information
-                    subsequences, subseqs_tok_scores, subseqs_indices = zip(*[zip(*subinf) for subinf in subsequences_info])
-                    subseqs_sum_scores = [sum(subseq_tok_scores) for subseq_tok_scores in subseqs_tok_scores] 
-                    subseqs_mean_scores = [np.mean(subseq_tok_scores) for subseq_tok_scores in subseqs_tok_scores] 
-                    # save to aggregate over all beams of instances 
-                    ins_subsequences.append(subsequences)
-                    ins_subseq_tok_scores.append(subseqs_tok_scores)
-                    ins_subseq_scores.append(subseqs_sum_scores)    # the total score of a subsequence (i.e. a QA)
-                    ins_subseq_mean_scores.append(subseqs_mean_scores)    # the total score of a subsequence (i.e. a QA)
-                    ins_subseq_idxs.append(subseqs_indices)    # the total score of a subsequence (i.e. a QA)
-                    ins_decoded_qas.append([tokenizer.decode(sub, skip_special_tokens=False) 
-                                            for sub in subsequences])
-                
-                # collect QA infos 
-                input_seq: str = clean_output_seq(tokenizer.decode(input_sequences[bch_idx]))
-                record = {"input": input_seq,
-                          "sequence-scores": sequences_scores[bch_idx].tolist(),
-                          "subsequences": ins_subsequences,
-                          "subsequences-tok-idxs": ins_subseq_idxs,
-                          "subsequences-tok-scores": ins_subseq_tok_scores,
-                          "subsequences-scores": ins_subseq_scores,
-                          "subsequences-mean-scores": ins_subseq_mean_scores,
-                          "QAs": ins_decoded_qas
-                          }
-                records.append(record)
-            
-        with open("subsequences_info.json", "w") as fout:
-            json.dump(records, fout)
+        # if num_return_sequences > 1:
+        #     metabeamer.save()
             
         return prediction_token_ids
     

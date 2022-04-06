@@ -32,17 +32,18 @@ class Preprocessor:
             "all_by_answer_ordering": self.extract_targets_by_answer_ordering,
             "qadiscourse_output": self.extract_qadiscourse_targets,
             }
-    
-    def get_preprocessor_for_model_type(data_args, tokenizer, is_t5_model: bool) -> 'Preprocessor':
-        if is_t5_model:
-            return 
-    
+        # List of preprocessing functions that "duplicate", i.e. return multiple sequences for some instances.
+        # We use this to distinguish preprocessing of the training set (duplicate) and dev/test (don't duplicate)
+        self.duplicating_preprocessing_output_functions = ("permutate_sample_num_of_qas",
+                                                           "permutate_sample_fixed",
+                                                           "permutate_all")
+     
     """
     External API:
     """
     def preprocess_input(self, x: pd.DataFrame) -> str:
         if self.data_args.preprocess_input_func not in self.preprocess_input_function_map:
-            raise ValueError(f"input preprocessing function {self.data_args.preprocess_input_func} not supported; "
+            raise ValueError(f"input preprocessing function '{self.data_args.preprocess_input_func}' not supported; "
                              f"options are: {list(self.preprocess_input_function_map.keys())}")
         preprocessing_function = self.preprocess_input_function_map[self.data_args.preprocess_input_func]
         input_seq = preprocessing_function(x)
@@ -50,12 +51,17 @@ class Preprocessor:
         prefix = self.get_sequence_prefix(x)
         return prefix + input_seq
     
-    def preprocess_output(self, x: pd.DataFrame) -> str:
+    def preprocess_output(self, x: pd.DataFrame, is_training: bool) -> str:
         row = x.iloc[0]
         if self.data_args.preprocess_output_func not in self.preprocess_output_function_map:
             raise ValueError(f"output preprocessing function {self.data_args.preprocess_output_func} not supported; "
                              f"options are: {list(self.preprocess_output_function_map.keys())}")
+        
         preprocessing_function = self.preprocess_output_function_map[self.data_args.preprocess_output_func]
+        if not is_training:
+            if self.data_args.preprocess_output_func in self.duplicating_preprocessing_output_functions:
+                preprocessing_function = self.preprocess_output_function_map["all_random_order"]
+            
         target_seqs = preprocessing_function(x)
         
         def further_target_seq_processing(target_seq: str) -> str:

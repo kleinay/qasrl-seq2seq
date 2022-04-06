@@ -63,16 +63,16 @@ class StringsToObjectsParser:
                 if not is_valid_qasrl_question:
                     # log that question is invalid w.r.t. QASRL format, but also keep QA in returned predicted QAs,
                     #  so that one can make use of the argument with the invalid (yet perhaps useful) questions
-                    invalid_qa_pairs_strs.append("Invalid QASRL question format", pair_str)
+                    invalid_qa_pairs_strs.append(("Invalid QASRL question format", pair_str, sentence))
                 qa = QuestionAnswer(qasrl_id=qasrl_idx, verb_idx=predicate_idx, verb=predicate, question=clean_question_str,
                                           answer=arguments_str, answer_range=arguments_ranges_str, **question_slots)
                 questions_answers.append(qa)
             except S2SOutputError as e:
                 logging.debug("Bad output, error: ", e)
-                invalid_qa_pairs_strs.append((e.error_type, pair_str))
+                invalid_qa_pairs_strs.append((e.error_type, pair_str, sentence))
             except Exception as e:
                 logging.debug("Bad output-format, error: ", e)
-                invalid_qa_pairs_strs.append(("Bad-format", pair_str))
+                invalid_qa_pairs_strs.append(("Bad-format", pair_str, sentence))
 
         return questions_answers, invalid_qa_pairs_strs
 

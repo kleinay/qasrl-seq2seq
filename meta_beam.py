@@ -19,8 +19,8 @@ class MetaBeam():
         # information collecting data-structures 
         self.records = []  # TODO for research
 
-    def save(self):
-        with open("subsequences_info.json", "w") as fout:
+    def save(self, out_filename: str):
+        with open(out_filename, "w") as fout:
             json.dump(self.records, fout)
             
     def collect_info(self, generated, input_sequences):
@@ -43,6 +43,7 @@ class MetaBeam():
         # Note: From looking at examples, scores[0] is always full with -100000000 for non-first-beam sequences (but regular for first beams).
         # Meantime if where there is a mismatch, remove last token of all `sequences` (minimal harm- removes <EOS> of longest sequence in batch)
         if len(scores) == seq_length-1:
+            # raise ValueError()
             sequences = sequences[:,:,:-1]
             seq_length = seq_length-1
         vocab_size = scores.shape[2]

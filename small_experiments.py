@@ -37,54 +37,57 @@ from notebook import *
 
 # #%%  best joint model so far
 for model_type in ["t5"]:
-    epochs=20
-    wandb_run_name=f"{now()}_{epochs}ep_{model_type}_joint_qanom"
-    full_experiment(model_type=model_type,
-                        train_dataset="joint_qanom",
-                        train_epochs=epochs,
-                        batch_size=12,
-                        gradient_accumulation_steps=14,
-                        learning_rate=0.001,
-                        dropout_rate=0.1,
-                        seed=44,
-                        source_prefix="parse: ",
-                        preprocess_input_func="input_predicate_marker",
-                        use_bilateral_predicate_marker=True,
-                        overwrite_output_dir=True,
-                        num_beams=5,
-                        logging_steps=500,
-                        eval_steps=500,
-                        save_steps=500,
-                        wandb_run_name=wandb_run_name,
-                        dir_switch="joint_optimal",
-                        qanom_joint_factor=14,
-                        description="""optimal joint config from sweep, mainly for qanom""",
-                        )
-    # wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_joint"
+    # epochs=20
+    # wandb_run_name=f"{now()}_{epochs}ep_{model_type}_qanom_custom"
     # full_experiment(model_type=model_type,
-    #                     train_dataset="joint_qanom",
+    #                     train_dataset="qanom",
     #                     train_epochs=epochs,
     #                     batch_size=12,
-    #                     gradient_accumulation_steps=8,
+    #                     gradient_accumulation_steps=14,
     #                     learning_rate=0.001,
-    #                     dropout_rate=0.15,
-    #                     # metric_for_best_model="eval_rouge1",
-    #                     source_prefix="parse <predicate_type>: ",
+    #                     dropout_rate=0.1,
+    #                     seed=44,
+    #                     source_prefix="parse: ",
     #                     preprocess_input_func="input_predicate_marker",
     #                     use_bilateral_predicate_marker=True,
     #                     overwrite_output_dir=True,
-    #                     num_beams=3,
-    #                     append_verb_form=True,
+    #                     num_beams=5,
     #                     logging_steps=500,
     #                     eval_steps=500,
     #                     save_steps=500,
     #                     wandb_run_name=wandb_run_name,
-    #                     dir_switch="qanom_joint",
+    #                     dir_switch="joint_optimal",
     #                     qanom_joint_factor=14,
-    #                     description="""joint after refactoring evaluations and hyper-parameter tuning""",
-    #                     # limit_train_data=0.01,
-    #                     # limit_eval_data=0.01,
+    #                     description="""optimal joint config from sweep, mainly for qanom""",
     #                     )
+    
+    epochs=1
+    wandb_run_name=f"{now()}_debug_{epochs}ep_{model_type}_qanom_custom"
+    full_experiment(model_type=model_type,
+                        train_dataset="qanom",
+                        train_epochs=epochs,
+                        batch_size=12,
+                        gradient_accumulation_steps=8,
+                        learning_rate=0.001,
+                        dropout_rate=0.15,
+                        # metric_for_best_model="eval_rouge1",
+                        source_prefix="parse: ",
+                        preprocess_input_func="input_predicate_marker",
+                        use_bilateral_predicate_marker=True,
+                        overwrite_output_dir=True,
+                        num_beams=3,
+                        append_verb_form=True,
+                        logging_steps=500,
+                        eval_steps=500,
+                        save_steps=500,
+                        wandb_run_name=wandb_run_name,
+                        dir_switch="debug",
+                        debug_mode=True,
+
+                        description="""debug upgrade transformers""",
+                        # limit_train_data=0.01,
+                        # limit_eval_data=0.01,
+                        )
   
 
 """ 

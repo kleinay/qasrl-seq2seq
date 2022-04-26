@@ -8,7 +8,7 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         ret = super().compute_loss(model, inputs, **kwargs)
         return ret
     
-    def training_step(model, inputs):
+    def training_step(self, model, inputs):
         ret = super().compute_loss(model, inputs)
         return ret
         

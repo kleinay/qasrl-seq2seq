@@ -64,6 +64,7 @@ from utils import (df_to_row_list, setup_wandb, replaceKeys, stack_rows, str2num
 import run_evaluation
 import meta_beam
 from custom_trainer import CustomSeq2SeqTrainer
+from seq2seq_model import QASRLSeq2SeqModel
 
 check_min_version("4.10.0.dev0")
 
@@ -170,9 +171,16 @@ class ModelArguments:
         metadata={"help": """This value is subtracted from a beam’s score if it generates a token same as any beam from other group at a particular time. 
                   Note that diversity_penalty is only effective if `group_beam_search` is enabled."""},
     )
+    
+    # custom parameters (implemented by us)
     constrain_generation: bool = field(
         default=False,
         metadata={"help": "Whether to apply constrained decoding during prediction."},
+    )
+    beam_search_method: Optional[str] = field(
+        # Literal["at_first_token"]
+        default=None,
+        metadata={"help": "what kind of beam_search algorithm to apply. None for default beam search."},
     )
     
 
@@ -572,10 +580,11 @@ def main():
     config.update(kwargs_for_model_config)       
     wandb.config.update({"model_name_or_path": model_args.model_name_or_path}, allow_val_change=True) 
     
-    model = AutoModelForSeq2SeqLM.from_pretrained(
+    model = QASRLSeq2SeqModel.from_pretrained(
+    # model = AutoModelForSeq2SeqLM.from_pretrained(
         model_args.model_name_or_path,
-        from_tf=bool(".ckpt" in model_args.model_name_or_path),
         config=config,
+        from_tf=bool(".ckpt" in model_args.model_name_or_path),
         cache_dir=model_args.cache_dir,
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
@@ -925,7 +934,7 @@ def main():
     # training_args.eval_steps = 500       
 
     # Initialize our Trainer
-    trainer = CustomSeq2SeqTrainer(
+    trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
@@ -965,18 +974,28 @@ def main():
             get_qasrl_full_sequence_dfa, set_as_redundance_answer_disposer_dfa)
         from seq2seq_constrained_decoding.constrained_decoding.dfa_decoding import set_decoding_to_dfa_constrained
         
-        # just naviely for testing 
+        # Define DFA factory based on input's token_ids  
         def dfa_factory(token_ids): 
             sentence = tokenizer.decode(token_ids, skip_special_tokens=True)
             sentence = preprocessor.reverse_input_preprocessing(sentence)
             qasrl_sequence_dfa = get_qasrl_full_sequence_dfa(sentence, tokenizer, special_tokens_constants)
             # on top, constrain the generation to not repeat tokens in answers for the same question
-            # set_as_redundance_answer_disposer_dfa(qasrl_sequence_dfa, special_tokens_constants, tokenizer, convert_to_word_ids=True)
+            set_as_redundance_answer_disposer_dfa(qasrl_sequence_dfa, special_tokens_constants, tokenizer, convert_to_word_ids=True)
             return qasrl_sequence_dfa
+       
         # enable special dfa-constrained beam search
         logger.info("Applying constrained decoding...")
-        set_decoding_to_dfa_constrained(model, dfa_factory=dfa_factory, tokenizer=tokenizer)
+        
+        # Old method for constrain decoding - replacing the "beam_search" of the model
+        # set_decoding_to_dfa_constrained(model, dfa_factory=dfa_factory, tokenizer=tokenizer)
+        
+        # New method: using custom QASRLSeqToSeqModel 
+        model.register_constraining_dfa(dfa_factory=dfa_factory)
+        
         data_args.num_beams = data_args.num_beams or 2 # must enable beam search to utilize DFA-constrained decoding
+    
+    # Set beam_search algorithm variant 
+    model.set_branching_strategy(model_args.beam_search_method)      
     
     # prepare generation parameters - kwargs for `model.generate`
     generate_kwargs_keys = ('num_beams', 'num_beam_groups', 'diversity_penalty', 'length_penalty',
@@ -1094,11 +1113,11 @@ def main():
             
             # "Meta-beam"
             # Process to analyze data of token-probability for all beams for all dev instances 
-            # if num_return_sequences > 1:
-            #     metabeamer.collect_info(generated, input_sequences)
+            if num_return_sequences > 1:
+                metabeamer.collect_info(generated, input_sequences)
             
-        # if num_return_sequences > 1:
-        #     metabeamer.save()
+        if num_return_sequences > 1:
+            metabeamer.save("subsequences_info.json")
             
         return prediction_token_ids
     

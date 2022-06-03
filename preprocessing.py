@@ -33,6 +33,7 @@ class Preprocessor:
             "all_shuffled": self.extract_targets_shuffled_order,
             "all_random_order": self.extract_targets_arbitrary_order,
             "all_by_answer_ordering": self.extract_targets_by_answer_ordering,
+            "all_by_role_ordering": self.extract_targets_by_role_ordering,
             "qadiscourse_output": self.extract_qadiscourse_targets,
             }
         # List of preprocessing functions that "duplicate", i.e. return multiple sequences for some instances.
@@ -244,6 +245,21 @@ class Preprocessor:
         return [f"{self.special_tokens.separator_output_pairs}".join(qa_reprs)]
 
     def extract_targets_by_answer_ordering(self, x: pd.DataFrame) -> str:
+        """
+        Extracts ((question, answers), ...)
+        """
+        qas = list(zip(x.question, x.answer, x.answer_range))
+        # sort QAs by Role (WH word of question) - 
+        RoleOrder = ["what", "who", "when", "where", "how", "why"] 
+        def sort_by_wh_word(triplet):
+            q,a,ranges=triplet
+            wh = q.split(' ')[0]
+            return RoleOrder.index(wh) if wh in RoleOrder else len(RoleOrder)
+        qas = sorted(qas, key=sort_by_wh_word)
+        qa_reprs = [f"{q}{self.special_tokens.separator_output_question_answer}{self._flatten_answers(t)}" for q, t, _ in qas]
+        return [f"{self.special_tokens.separator_output_pairs}".join(qa_reprs)]
+    
+    def extract_targets_by_role_ordering(self, x: pd.DataFrame) -> str:
         """
         Extracts ((question, answers), ...)
         """

@@ -17,7 +17,7 @@ from notebook import *
 #                     fp16=True,
 #                     source_prefix="Generate QAs for <predicate_type> QASRL: ",
 #                     preprocess_input_func="input_predicate_marker",
-#                     preprocess_output_func="all_by_answer_ordering", # "permutate_sample_fixed", "permutate_sample_num_of_qas", "permutate_all", "all_shuffled", "all_random_order", "all_by_answer_ordering"
+#                     preprocess_output_func="all_by_answer_ordering", # "permutate_sample_fixed", "permutate_sample_num_of_qas", "permutate_all", "all_shuffled", "all_random_order", "all_by_answer_ordering", "all_by_role_ordering"
 #                     append_verb_form=True,
 #                     predicate_marker_type="generic", # or "pred_type"
 #                     use_bilateral_predicate_marker=False,

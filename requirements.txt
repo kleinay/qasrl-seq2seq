@@ -1,5 +1,5 @@
-torch
-git+https://github.com/huggingface/transformers
+torch>=1.9.0
+transformers==4.17.0
 datasets
 rouge_score
 networkx

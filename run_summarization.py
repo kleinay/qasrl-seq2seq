@@ -23,7 +23,7 @@ import json
 import logging
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, astuple
 from typing import Literal, Optional, List, Dict, Tuple
 from datasets.arrow_dataset import Dataset
 from datasets.dataset_dict import DatasetDict
@@ -63,7 +63,6 @@ from utils import (df_to_row_list, setup_wandb, replaceKeys, stack_rows, str2num
                    without_prefix, without_suffix, duplicate_by_per_element_factor)
 import run_evaluation
 import meta_beam
-from custom_trainer import CustomSeq2SeqTrainer
 from seq2seq_model import QASRLSeq2SeqModel
 
 check_min_version("4.10.0.dev0")
@@ -322,6 +321,9 @@ class DataTrainingArguments:
         # Literal["pre", "post"]
         default=None, metadata={"help": "Whether and how incorporate `predicate_type` info into the output sequence, as an MTL objective to enhance joint learning."}
     ) 
+    contextualize_qasrl: bool = field(
+        default=False, metadata={"help": "Whether preprocess QASRL dataset with contextualization - incorporating sentence context into questions' placeholders."}
+    )
     
     # Arguments for inference (predict)
     predicate_type: Optional[str] = field(
@@ -599,6 +601,71 @@ def main():
         raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
 
     # Preprocessing the datasets.
+    
+    # Contextualization of QASRL questions
+    if data_args.contextualize_qasrl:
+        from roleqgen.question_translation import QuestionTranslator
+        contextualizer = QuestionTranslator.from_pretrained("biu-nlp/contextualizer_qasrl", device_id=0)
+        
+        # Prepare contexts (inputs) for contextualizer
+        def as_input_for_contextualizer(qa):
+            question = ' '.join(qa['question']).replace(' _', '').replace(' ?', '?')
+            return {'proto_question': question, 
+                    'predicate_lemma': qa['verb_form'],
+                    'predicate_span': f"{qa['predicate_idx']}:{qa['predicate_idx'] + 1}",
+                    'text': qa['sentence']}
+        
+        # Take contextualized slots from contextualized-question (co_q)  
+        def to_filled_slots(orig_slots, co_q: str) -> List[str]:
+            # context can be at slots SUBJ (2), OBJ (4), OBJ2 (6); take from contextualized question
+            if not orig_slots:
+                return orig_slots
+            wh, aux, subj, verb, obj, prep, obj2, _ = orig_slots
+            co_q = without_suffix(co_q, '?') + ' '
+            if wh not in co_q or f"{verb} " not in co_q or (aux != "_" and aux not in co_q):
+                return orig_slots
+            
+            pre_v, post_v = co_q.split(f"{verb} ", 1)
+            # subj is the part before verb after prefix
+            subj = without_prefix(pre_v, wh.title()).lstrip()
+            subj = without_prefix(subj, aux).strip()
+            # if prep is not copied within co_q, cannot identify objects
+            if prep != "_" and prep not in co_q:
+                return [wh, aux, subj, verb, obj, prep, obj2, '?']
+            # if at most one object is present, can easily know which is it
+            if obj != "_" and obj2 == "_":
+                obj = without_suffix(post_v.rstrip(), prep).strip()
+            elif obj == "_" and obj2 != "_":
+                obj2 = without_prefix(post_v.rstrip(), prep).strip()
+            # if both objects are present, prep (in between) should be non empty
+            elif obj != "_" and obj2 != "_":
+                obj, obj2 = post_v.split(f" {prep} ", 1)
+            return [wh, aux, subj, verb, obj, prep, obj2, '?']      
+        
+    def contextualize(orig_dataset, split):
+        if not data_args.contextualize_qasrl:
+            return orig_dataset
+        logger.info(f"Contextualizing {split} dataset...")
+        # orig_dataset = raw_datasets[split]
+        # Prepare contextualizer inputs from datatset
+        inputs_for_contextualizer = orig_dataset.map(as_input_for_contextualizer, remove_columns=[
+            'sentence', 'sent_id', 'predicate_idx', 'predicate', 'is_verbal', 'verb_form', 'question', 'answers', 'answer_ranges'])
+        inputs_for_contextualizer = inputs_for_contextualizer.to_pandas().to_dict('records')
+        # Run contextualizer
+        contextualized_questions = contextualizer.predict(inputs_for_contextualizer)
+        # Modify questions in dataset
+        def contextualize_dataset(example, idx):
+            example['question'] = to_filled_slots(example['question'], contextualized_questions[idx])
+            return example  
+        ret = orig_dataset.map(
+            contextualize_dataset,
+            with_indices=True,
+            load_from_cache_file=not data_args.overwrite_cache,
+            desc=f"contextualizing question of the {split} dataset"
+        )
+        return ret
+             
+    
     # We need to tokenize inputs and targets.
     if training_args.do_train:
         column_names = raw_datasets["train"].column_names
@@ -773,10 +840,12 @@ def main():
             train_dataset = train_dataset.select(range(data_args.max_train_samples))
         if data_args.limit_train_data is not None:
             train_dataset = train_dataset.select(range(int(len(train_dataset)*data_args.limit_train_data)))
+        # train_dataset = contextualize(train_dataset, 'train')
         with training_args.main_process_first(desc="train dataset map pre-processing"):
             orig_train_dataset = train_dataset
+            training_preprocess_function = lambda x: preprocess_function(x, is_training=True)
             train_dataset = train_dataset.map(
-                preprocess_function,
+                training_preprocess_function,
                 batched=True,
                 num_proc=data_args.preprocessing_num_workers,
                 remove_columns=column_names,
@@ -796,6 +865,7 @@ def main():
             validation_dataset = validation_dataset.select(range(data_args.max_eval_samples))
         if data_args.limit_eval_data is not None:
             validation_dataset = validation_dataset.select(range(int(len(validation_dataset)*data_args.limit_eval_data)))
+        validation_dataset = contextualize(validation_dataset, 'evaluation')
         with training_args.main_process_first(desc="validation dataset map pre-processing"):
             orig_validation_dataset = validation_dataset
             validation_dataset = validation_dataset.map(
@@ -816,6 +886,7 @@ def main():
             test_dataset = test_dataset.select(range(data_args.max_eval_samples))
         if data_args.limit_eval_data is not None:
             test_dataset = test_dataset.select(range(int(len(test_dataset)*data_args.limit_eval_data)))
+        test_dataset = contextualize(test_dataset, 'test')
         # If predict_dataset includes gold standard reference, use the regular preprocessing which also prepares `labels`;
         # Otherwise, do inference without labels 
         if "question" in test_dataset.column_names and "answers" in test_dataset.column_names:
@@ -866,8 +937,19 @@ def main():
             seq = without_prefix(seq, special_tokens_constants.bos_token)
         return seq.strip()
     
+    def clean_output_from_predicate_type(seq: str) -> str:
+        if data_args.learn_predicate_type == "pre":
+            seq = without_prefix(seq, "nominal | ")    
+            seq = without_prefix(seq, "verbal | ")    
+        elif data_args.learn_predicate_type == "post":
+            seq = without_suffix(seq, " | nominal")    
+            seq = without_suffix(seq, " | verbal")   
+        return seq 
+    
     def postprocess_sequences(sequences):
-        return [clean_output_seq(pred) for pred in sequences]
+        sequences = [clean_output_seq(pred) for pred in sequences]
+        sequences = [clean_output_from_predicate_type(pred) for pred in sequences]
+        return sequences   
     
     def prepare_for_rouge(seqs):
         return ["\n".join(nltk.sent_tokenize(seq)) for seq in seqs]
@@ -1020,14 +1102,17 @@ def main():
         input_seqs = [clean_output_seq(tokenizer.decode(dataset[i]['input_ids']))
                       for i in range(len(dataset))]
         
-        #TODO future: remove non-QASRL segments of the output sequences 
+        # Remove non-QASRL segments of the output sequences 
         #  e.g. depends on data_args.learn_predicate_type
-        
+        predictions = [clean_output_from_predicate_type(s)
+                      for s in predictions]
+            
         # save raw output
         raw_out_df_dict = {"input": input_seqs, "predicted output": predictions}
         if 'labels' in dataset[0]:
-            gold_out_seqs = [clean_output_seq(tokenizer.decode(dataset[i]['labels']))
+            gold_out_seqs = [tokenizer.decode(dataset[i]['labels'])
                                 for i in range(len(dataset))]
+            gold_out_seqs = postprocess_sequences(gold_out_seqs)
             raw_out_df_dict["gold output"] = gold_out_seqs
         raw_out_df = pd.DataFrame(raw_out_df_dict)
         raw_out_df.to_csv(raw_prediction_sequences_file, index=False)
@@ -1065,6 +1150,32 @@ def main():
         wandb.run.summary.update(errors_log_dict)
         wandb.log({"invalid output QA rate by type": invalid_types_relative_frequency.to_frame().transpose()})
     
+        # consolidate repeating/subsumed answers
+        def consolidate_answers(qa: QuestionAnswer) -> QuestionAnswer:
+            sep = "~!~"
+            if sep not in qa.answer: return qa
+            answers = qa.answer.split(sep)
+            answer_ranges = qa.answer_range.split(sep)
+            ans_id_to_remove = []
+            
+            for i, ans in enumerate(answers):
+                for other_ans in answers[:i] + answers[i+1:]:
+                    if ans in other_ans:
+                        ans_id_to_remove.append(i)
+                        break
+            for i in reversed(ans_id_to_remove):
+                answers.pop(i)
+                answer_ranges.pop(i)
+            answer = sep.join(answers)
+            answer_range = sep.join(answer_ranges)
+            new_qa = QuestionAnswer(*astuple(qa))
+            new_qa.answer = answer
+            new_qa.answer_range = answer_range
+            return new_qa
+
+        # TODO answer consolidation is degrading UA by 2 points and LA by 1 point... why?? shouldn't we consolidate at all?
+        # predicted_QAs = [consolidate_answers(qa) for qa in predicted_QAs]
+                    
         # Save parsed predictions in qasrl csv format                     
         df_parsed_predictions = pd.DataFrame([x.to_dict() for x in predicted_QAs])
         if len(df_parsed_predictions)>0 and "sentence" in dataset.column_names:
@@ -1095,7 +1206,7 @@ def main():
             generated = model.generate(input_sequences.to(model.device),
                             max_length=data_args.val_max_target_length,
                             return_dict_in_generate=True,
-                            output_scores=True,
+                            # output_scores=True,
                             # num_beams=data_args.num_beams,
                             num_return_sequences=num_return_sequences,
                             # Inference parameters
@@ -1113,11 +1224,14 @@ def main():
             
             # "Meta-beam"
             # Process to analyze data of token-probability for all beams for all dev instances 
-            if num_return_sequences > 1:
-                metabeamer.collect_info(generated, input_sequences)
+        #     if num_return_sequences > 1:
+        #         try:
+        #             metabeamer.collect_info(generated, input_sequences)
+        #         except ValueError as err:
+        #             print(err)
             
-        if num_return_sequences > 1:
-            metabeamer.save("subsequences_info.json")
+        # if num_return_sequences > 1:
+        #     metabeamer.save("subsequences_info.json")
             
         return prediction_token_ids
     
@@ -1149,6 +1263,10 @@ def main():
             )
             
             df_parsed_predictions = decode_and_parse_predictions(evaluation_dataset, predictions)
+            
+            # TODO let's try to consolidate repeating / "subsumed" answers of the same question here
+            
+            
             df_gold = pd.DataFrame(orig_evaluation_dataset)
             eval_protocol = data_args.evaluation_protocol
             # TODO Future: support both evaluation protocols simultanously
@@ -1156,7 +1274,8 @@ def main():
                 eval_measures = run_evaluation.run_qasrl_gs_evaluation(df_parsed_predictions, df_gold)
             if "qanom" == eval_protocol:
                 eval_measures = run_evaluation.run_qanom_evaluation(df_parsed_predictions, df_gold)
-            unlabelled_arg, labelled_arg, unlabelled_role = eval_measures
+            unlabelled_arg, labelled_arg, unlabelled_role, errors = eval_measures
+            recall_mistakes_df, precision_mistakes_df = errors
             eval_measures_dict = {
                 "Unlabled Arg f1": unlabelled_arg.f1(),
                 "Unlabled Arg precision": unlabelled_arg.prec(),
@@ -1168,12 +1287,19 @@ def main():
                 "Role precision": unlabelled_role.prec(),
                 "Role recall": unlabelled_role.recall(),
             }
+            # keep evaluation results in output dir
             run_evaluation.print_evaluations(unlabelled_arg, labelled_arg, unlabelled_role)
             wandb.log(eval_measures_dict)
             results.update(eval_measures_dict) 
             eval_fn = f"{training_args.output_dir}/evaluation_by_{eval_protocol}_protocol.txt"
-            run_evaluation.write_qasrl_evaluation_to_file(eval_fn, *eval_measures)
+            run_evaluation.write_qasrl_evaluation_to_file(eval_fn, *eval_measures[:3])
             wandb.save(eval_fn)
+            recall_errors_fn = f"{training_args.output_dir}/recall_errors.csv"
+            precision_errors_fn = f"{training_args.output_dir}/precision_errors.csv"
+            recall_mistakes_df.to_csv(recall_errors_fn)
+            precision_mistakes_df.to_csv(precision_errors_fn)
+            wandb.save(recall_errors_fn)
+            wandb.save(precision_errors_fn)
 
 
     # Inference (Prediction on test)

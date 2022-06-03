@@ -26,7 +26,7 @@ class MetaBeam():
     def collect_info(self, generated, input_sequences):
         " Get one batch of inference. Scrape subsequences information. "
         sequences = generated["sequences"]  # (eval_batch_size * num_return_sequences, seq_length)
-        scores = torch.stack(generated["scores"]) # (seq_length (-1 ?), eval_batch_size * num_return_sequences, vocab_size)
+        scores = torch.stack(generated["scores"]) # (~seq_length, eval_batch_size * num_return_sequences, vocab_size)
         sequences_scores = generated["sequences_scores"] # (eval_batch_size * num_return_sequences)
         # define sizes
         n_seqs_in_batch, seq_length = sequences.shape
@@ -42,10 +42,12 @@ class MetaBeam():
         #  and I can't understand why. TODO understand the meaning of this phenomena. 
         # Note: From looking at examples, scores[0] is always full with -100000000 for non-first-beam sequences (but regular for first beams).
         # Meantime if where there is a mismatch, remove last token of all `sequences` (minimal harm- removes <EOS> of longest sequence in batch)
-        if len(scores) == seq_length-1:
-            # raise ValueError()
-            sequences = sequences[:,:,:-1]
-            seq_length = seq_length-1
+        
+        # Another debug note: another mismatched occurred to opposite direction - len(scores)==110, len(sequences)==108
+
+        if len(scores) != seq_length:
+            raise ValueError(f"Mismatch between scores' sequence-length ({len(scores)}) and sequences'  sequence-length ({seq_length})")
+
         vocab_size = scores.shape[2]
         scores = scores.transpose(0,1)
         scores = scores.reshape(eval_batch_size, self.num_return_sequences, seq_length, vocab_size)

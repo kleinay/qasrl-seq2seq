@@ -148,7 +148,7 @@ class QASRL_Pipeline(Text2TextGenerationPipeline):
 
     def postprocess(self, model_outputs):
         output_seq = self.tokenizer.decode(
-            model_outputs["output_ids"][0],
+            model_outputs["output_ids"].squeeze(),
             skip_special_tokens=False,
             clean_up_tokenization_spaces=False,
         )
@@ -173,9 +173,9 @@ class QASRL_Pipeline(Text2TextGenerationPipeline):
     
     
 if __name__ == "__main__":
-    # pipe = QASRL_Pipeline("kleinay/qanom-seq2seq-model-baseline")
+    pipe = QASRL_Pipeline("kleinay/qanom-seq2seq-model-joint")
     # pipe = QASRL_Pipeline("trained_models/t5_30ep-on-joint-qanom_seq-prefix_23.11.21")
-    pipe = QASRL_Pipeline("trained_models/t5_10ep-joint-qanom_15.12.21")
+    # pipe = QASRL_Pipeline("trained_models/t5_10ep-joint-qanom_15.12.21")
     res1 = pipe("The student was interested in Luke 's <predicate> research about sea animals .", verb_form="research", predicate_type="nominal")
     res2 = pipe(["The doctor was interested in Luke 's <predicate> treatment .",
                  "The Veterinary student was interested in Luke 's <predicate> treatment of sea animals ."], verb_form="treat", predicate_type="nominal", num_beams=10)

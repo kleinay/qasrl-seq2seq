@@ -1,7 +1,8 @@
 from typing import Optional, Union, Iterable, List, Any
-import wandb
+import itertools, math, random
 import pandas as pd
-import itertools
+import numpy as np
+import wandb
 import torch
 
 
@@ -90,4 +91,36 @@ def split_by_indices(lst: List[Any], sep_indices: List[int]) -> List[List[Any]]:
 
 def strip_sequence(seq: torch.Tensor, val_to_strip: int = 0) -> torch.Tensor:
     return seq[seq!=val_to_strip]
-    
+
+def sample_permutations(lst: List[Any], k: int, with_replacement = False) -> List[List[Any]]:
+    " Return a sample of `k` random permutations of `lst` "
+    n_all_permutations = math.factorial(len(lst))
+    if k / n_all_permutations < 0.1 or n_all_permutations > 100000:
+        return _sample_permutations_without_enumeration(lst, k, with_replacement) 
+    else:
+        return _sample_permutations_with_enumeration(lst, k, with_replacement) 
+         
+
+def _sample_permutations_without_enumeration(lst: List[Any], k: int, with_replacement = False) -> List[List[Any]]:
+    """ 
+    Return a sample of `k` random permutations of `lst`, without enumerating all possible permutations. 
+    Warning: assuming collision probability is tiny.
+    """
+    selected_permutations = []
+    while len(selected_permutations) < k:
+        candidate_permutation = np.random.choice(lst, size=len(lst), replace=False).tolist()
+        if with_replacement or candidate_permutation not in selected_permutations:
+            selected_permutations.append(candidate_permutation)
+    return selected_permutations
+
+def _sample_permutations_with_enumeration(lst: List[Any], k: int, with_replacement = False) -> List[List[Any]]:
+    """ 
+    Return a sample of `k` random permutations of `lst`, by sampling from enumertaed list of all possible permutations.
+    Warning: Can be VERY memory demanding (and may crash) for a large `lst`.
+    """
+    permutations = list(itertools.permutations(lst))
+    if not with_replacement:
+        k = min(k, len(permutations))
+        return random.sample(permutations, k=k)
+    else:
+        return random.choices(permutations, k=k)

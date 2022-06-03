@@ -5,6 +5,9 @@ from argparse import Namespace
 import pandas as pd
 import random
 import itertools
+import math
+
+import utils
 
 class Preprocessor:
     def __init__(self,
@@ -37,6 +40,8 @@ class Preprocessor:
         self.duplicating_preprocessing_output_functions = ("permutate_sample_num_of_qas",
                                                            "permutate_sample_fixed",
                                                            "permutate_all")
+        # where there a a lot of QAs, enumerating their permutations is intractible
+        self.MAX_PERMUTATIONS = 10
      
     """
     External API:
@@ -192,8 +197,10 @@ class Preprocessor:
         """
         qa_reprs = [f"{q}{self.special_tokens.separator_output_question_answer}{self._flatten_answers(t)}" 
                     for q, t in zip(x.question, x.answer)]
+        permutations = utils.sample_permutations(qa_reprs, 
+                                                 k=min(self.MAX_PERMUTATIONS, math.factorial(len(qa_reprs))))
         return [f"{self.special_tokens.separator_output_pairs}".join(permuted_qas)
-                for permuted_qas in itertools.permutations(qa_reprs)]
+                for permuted_qas in permutations]
         
     def extract_qa_permutations_as_qas(self, x: pd.DataFrame) -> List[str]:
         """
@@ -203,7 +210,7 @@ class Preprocessor:
         qa_reprs = [f"{q}{self.special_tokens.separator_output_question_answer}{self._flatten_answers(t)}" 
                     for q, t in zip(x.question, x.answer)]
         n_permutations_to_sample = len(qa_reprs)
-        sampled_permutations = self._sample_permutations(qa_reprs, k=n_permutations_to_sample)
+        sampled_permutations = utils.sample_permutations(qa_reprs, k=n_permutations_to_sample)
         return [f"{self.special_tokens.separator_output_pairs}".join(permuted_qas)
                 for permuted_qas in sampled_permutations]
         
@@ -215,7 +222,7 @@ class Preprocessor:
         qa_reprs = [f"{q}{self.special_tokens.separator_output_question_answer}{self._flatten_answers(t)}" 
                     for q, t in zip(x.question, x.answer)]
         n_permutations_to_sample = self.sample_k_permutations_per_instance
-        sampled_permutations = self._sample_permutations(qa_reprs, k=n_permutations_to_sample, 
+        sampled_permutations = utils.sample_permutations(qa_reprs, k=n_permutations_to_sample, 
                                                          with_replacement=True)
         return [f"{self.special_tokens.separator_output_pairs}".join(permuted_qas)
                 for permuted_qas in sampled_permutations]
@@ -296,11 +303,3 @@ class Preprocessor:
     def _flatten_answers(self, targets: List[str]) -> str:
         return f"{self.special_tokens.separator_output_answers}".join(targets)
     
-    def _sample_permutations(self, lst: List[Any], k: int, with_replacement = False) -> List[List[Any]]:
-        " Return a sample of `k` random permutations of `lst` "
-        permutations = list(itertools.permutations(lst))
-        if not with_replacement:
-            k = min(k, len(permutations))
-            return random.sample(permutations, k=k)
-        else:
-            return random.choices(permutations, k=k)

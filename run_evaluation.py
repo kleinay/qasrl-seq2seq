@@ -6,7 +6,7 @@ import wandb
 
 from qasrl_gs.scripts.evaluate_dataset import eval_datasets as qasrl_evaluate
 from utils import setup_wandb, reshape_qasrl_into_qanom
-from qanom.evaluation.evaluate import eval_datasets as qanom_evaluate, Metrics, BinaryClassificationMetrics
+from qanom.evaluation.evaluate import eval_datasets as qanom_evaluate, Metrics, get_recall_and_precision_mistakes
 from qanom.annotations.decode_encode_answers import decode_qasrl
 from qanom.annotations.common import set_key_column
 from qanom.utils import rename_column
@@ -44,7 +44,9 @@ def run_qasrl_gs_evaluation(predictions_df: pd.DataFrame, ground_truth_df: pd.Da
         ground_truth_df.loc[:, slot] = ground_truth_df[slot].apply(lambda s: '' if s=='_' else s)
     # add additional binary slots
     ground_truth_df.loc[:, 'is_negated'] = ground_truth_df.apply(extract_is_negated, axis=1)    
-    ground_truth_df.loc[:, 'is_passive'] = False   # TODO make it work correctly
+    # TODO make 'is_passive' to work correctly - currently ignoring 
+    ground_truth_df.loc[:, 'is_passive'] = False   
+    predictions_df.loc[:, 'is_passive'] = False   
     # linearize question column in `ground_truth_df`
     def q_slot_to_q_str(q_slots) -> str:
         q_slots = [sl for sl in q_slots[:-1] if sl != '_']
@@ -58,7 +60,10 @@ def run_qasrl_gs_evaluation(predictions_df: pd.DataFrame, ground_truth_df: pd.Da
 
     arg, larg, role = qasrl_evaluate(grt_df=ground_truth_df, sys_df=predictions_df)
     
-    return arg, larg, role
+    # copied from qanom - not sure it works properly
+    recall_mistakes_df, precision_mistakes_df = get_recall_and_precision_mistakes(predictions_df, ground_truth_df)
+
+    return arg, larg, role, (recall_mistakes_df, precision_mistakes_df)
 
 def run_qanom_evaluation(predictions_df: pd.DataFrame, ground_truth_df: pd.DataFrame):   
     if len(predictions_df)==0:
@@ -123,8 +128,8 @@ def run_qanom_evaluation(predictions_df: pd.DataFrame, ground_truth_df: pd.DataF
     # Compute evaluation measures
     arg, larg, role, is_verbal, _ = qanom_evaluate(predictions_df, ground_truth_df)
 
-    # recall_mistakes_df, precision_mistakes_df = get_recall_and_precision_mistakes(df_parsed_outputs, qanom_test_df)
-    return arg, larg, role
+    recall_mistakes_df, precision_mistakes_df = get_recall_and_precision_mistakes(predictions_df, ground_truth_df)
+    return arg, larg, role, (recall_mistakes_df, precision_mistakes_df)
 
 def write_qasrl_evaluation_to_file(fn, arg, larg, role, pred_detection = None):
     with open(fn, "w") as fout:

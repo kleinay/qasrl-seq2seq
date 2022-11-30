@@ -56,7 +56,7 @@ class QASRL_Pipeline(Text2TextGenerationPipeline):
         self.special_tokens = get_markers_for_model(self.is_t5_model)
         # self.preprocessor = preprocessing.Preprocessor(model.config.preprocessing_kwargs, self.special_tokens)
         self.data_args = Namespace(**model.config.preprocessing_kwargs)
-        # backward compatibility - default keyword values implemeted in `run_summarization`, thus not saved in `preprocessing_kwargs`
+        # backward compatibility - default keyword values implemeted in `run_parsing_model`, thus not saved in `preprocessing_kwargs`
         if "predicate_marker_type" not in vars(self.data_args):
             self.data_args.predicate_marker_type = "generic"
         if "use_bilateral_predicate_marker" not in vars(self.data_args):

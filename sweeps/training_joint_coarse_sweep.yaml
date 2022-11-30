@@ -3,7 +3,7 @@ method: random
 metric:
   name: Labled Arg f1
   goal: maximize
-program: run_summarization.py
+program: run_parsing_model.py
 parameters:
   model_name_or_path:
     value: t5-small

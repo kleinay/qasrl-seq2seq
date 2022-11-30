@@ -61,7 +61,7 @@ from strings_to_objects_parser import QuestionAnswer
 import utils
 from utils import (df_to_row_list, setup_wandb, replaceKeys, stack_rows, str2num, 
                    without_prefix, without_suffix, duplicate_by_per_element_factor)
-import run_evaluation
+import evaluation
 import meta_beam
 from seq2seq_model import QASRLSeq2SeqModel
 
@@ -448,15 +448,7 @@ def main():
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    # Get the datasets: you can either provide your own CSV/JSON training and evaluation files (see below)
-    # or just provide the name of one of the public datasets available on the hub at https://huggingface.co/datasets/
-    # (the dataset will be downloaded automatically from the datasets Hub).
-    #
-    # For CSV/JSON files this script will use the first column for the full texts and the second column for the
-    # summaries (unless you specify column names for this with the `text_column` and `summary_column` arguments).
-    #
-    # In distributed training, the load_dataset function guarantee that only one local process can concurrently
-    # download the dataset.
+    # Get the datasets
     def get_predicate_type_label_from_dataset_name(dataset_name) -> str:
         if "qa_srl" in dataset_name:
             predicate_type = "verbal" 
@@ -1313,9 +1305,9 @@ def main():
             eval_protocol = data_args.evaluation_protocol
             # TODO Future: support both evaluation protocols simultanously
             if "qasrl" == eval_protocol:   # follow qasrl-gs protocol
-                eval_measures = run_evaluation.run_qasrl_gs_evaluation(df_parsed_predictions, df_gold)
+                eval_measures = evaluation.run_qasrl_gs_evaluation(df_parsed_predictions, df_gold)
             if "qanom" == eval_protocol:
-                eval_measures = run_evaluation.run_qanom_evaluation(df_parsed_predictions, df_gold)
+                eval_measures = evaluation.run_qanom_evaluation(df_parsed_predictions, df_gold)
             unlabelled_arg, labelled_arg, unlabelled_role, errors = eval_measures
             recall_mistakes_df, precision_mistakes_df = errors
             eval_measures_dict = {
@@ -1330,11 +1322,11 @@ def main():
                 "Role recall": unlabelled_role.recall(),
             }
             # keep evaluation results in output dir
-            run_evaluation.print_evaluations(unlabelled_arg, labelled_arg, unlabelled_role)
+            evaluation.print_evaluations(unlabelled_arg, labelled_arg, unlabelled_role)
             wandb.log(eval_measures_dict)
             results.update(eval_measures_dict) 
             eval_fn = f"{training_args.output_dir}/evaluation_by_{eval_protocol}_protocol.txt"
-            run_evaluation.write_qasrl_evaluation_to_file(eval_fn, *eval_measures[:3])
+            evaluation.write_qasrl_evaluation_to_file(eval_fn, *eval_measures[:3])
             wandb.save(eval_fn)
             recall_errors_fn = f"{training_args.output_dir}/recall_errors.csv"
             precision_errors_fn = f"{training_args.output_dir}/precision_errors.csv"

@@ -28,7 +28,6 @@ def evaluate_qadiscourse(model_dir, wandb_run_name: Optional[str]):
     raise NotImplementedError()
 
     
-    
 def run_qasrl_gs_evaluation(predictions_df: pd.DataFrame, ground_truth_df: pd.DataFrame):
     # Adjust to qasrl format for qasrl-gs evaluation package requirements 
     rename_column(ground_truth_df, 'sent_id', 'qasrl_id')
@@ -160,11 +159,4 @@ def print_evaluations(arg, larg, role):
     print(f"labeled-arg-f1 \t\t{100*larg.prec():.1f}\t{100*larg.recall():.1f}\t{100*larg.f1():.2f}\n") 
     print(f"role-f1 \t\t{100*role.prec():.1f}\t{100*role.recall():.1f}\t{100*role.f1():.2f}\n") 
 
-if __name__ == "__main__":
-    ap = ArgumentParser()
-    ap.add_argument("sys_path")
-    ap.add_argument("ground_truth_path")
-    ap.add_argument("-s","--sentences_path", required=False)
-    ap.add_argument("--wandb_run_name", required=False)
-    args = ap.parse_args()
-    run_qasrl_gs_evaluation(args.sys_path, args.ground_truth_path, args.sentences_path, args.wandb_run_name)
+

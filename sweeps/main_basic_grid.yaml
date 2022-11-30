@@ -3,8 +3,8 @@ method: grid
 metric:
   name: Labled Arg f1
   goal: maximize
-# program: run_summarization.py # for baselines
-program: joint_train_experiment.py # for joint
+# program: run_parsing_model.py # for single-task baselines
+program: joint_train_experiment.py # for joint QASRL--QANom
 
 parameters:
   num_train_epochs:
@@ -74,20 +74,21 @@ command:
   - 'eval_loss'
   - '--predicate_marker_type' 
   - 'generic'
-  - '--model_type' 
-  - 't5'
   - '--preprocess_input_func' 
   - 'input_predicate_marker'
   - '--output_dir' 
-  - '/home/nlp/kleinay/tmp/t5-tst-summarization/joint/main_grid'  
+  - '/home/nlp/kleinay/tmp/t5-tst-summarization/joint/main_grid'  # Specify location for saving the new trained model
   - '--model_name_or_path' 
-  - 't5-small'
+  - 't5-small' # Here you can Specify any model name for the HF Model Hub. Currently only supporting T5 models (e.g. using task prefixes).
+  - '--model_type' 
+  - 't5'  # "bart" models were supported previously, but we did not maintain this behavior. 
+  
   # - '--dataset_name' 
-  # - 'biu-nlp/qanom'
-  # - 'kleinay/qa_srl'
+  # - 'biu-nlp/qanom'   # Klein 2020
+  # - 'kleinay/qa_srl'  # train from FitzGeralds 2018, dev/test from Roit 2020 
 
-  # - '--limit_train_data'
-  # - 0.07
+  # - '--limit_train_data'  
+  # - 0.07      # for "QASRL-Small" experiments
 
   - '--wandb_run_name' 
   - 'main grid sweep joint (eval on dev)  ' 

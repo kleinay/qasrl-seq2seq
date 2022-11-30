@@ -3,7 +3,7 @@ method: random
 metric:
   name: Labled Arg f1
   goal: maximize
-program: run_summarization.py
+program: run_parsing_model.py
 parameters:
   wandb_run_name:
     value: "Evaluate qanom sweep - temperature check"
@@ -55,7 +55,7 @@ command:
   - '--fp16'
   - '--load_best_model_at_end'
   - '--do_eval_on' 
-  - 'validation'
+  - 'validation' # or "test"
   - '--save_strategy' 
   - 'steps'
   - '--logging_strategy' 

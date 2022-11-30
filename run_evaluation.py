@@ -80,6 +80,19 @@ def run_qanom_evaluation(predictions_df: pd.DataFrame, ground_truth_df: pd.DataF
     
     # rename_column(predictions_df, 'verb', 'noun')
     
+    # Temporal? for working on analyses
+    ground_truth_df.loc[:,'qa_position'] = ground_truth_df.groupby(['qasrl_id', 'target_idx']).cumcount()
+    ground_truth_df["qa_position_group"] = ground_truth_df.qa_position.apply(lambda n: str(n+1) if n<3 else ">3") 
+    ground_truth_df.loc[:,'num_qas'] =  ground_truth_df.groupby(['qasrl_id', 'target_idx']).qa_position.transform('max') + 1
+    ground_truth_df["num_qas_group"] = ground_truth_df.num_qas.apply(lambda n: str(n) if n<=3 else ">3") 
+    # ans_index = ground_truth_df.answer_range.str.split("~!~").str.get(0).str.split(":").str.get(0).astype(int)
+    # dep_range = np.absolute(ans_index - ground_truth_df.verb_idx)
+    # dependency_range_buckets = {(0,3): "1-2", (3,6):"3-5", (6,9):"6-8", (9,300):"9-Inf"}
+    # from utils import arr_to_buckets
+    ground_truth_df["dep_range_group"] = ''
+    ground_truth_df["sentence_length_group"] = ''
+    ground_truth_df["raw_question"] = ''
+    
     ground_truth_df.loc[:,'verb_prefix'] = ''
     ground_truth_df.loc[:,'verb_slot_inflection'] = ''
     predictions_df.loc[:,'is_verbal'] = True

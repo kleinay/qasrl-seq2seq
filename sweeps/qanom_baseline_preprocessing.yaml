@@ -1,0 +1,113 @@
+name: linearization experiment on joint training
+description: repeating the experiment that compare linearization methods, after fixing another bug (is_training wasn't set to True)  
+method: grid
+metric:
+  name: Labled Arg f1
+  goal: maximize
+program: joint_train_experiment.py
+parameters:
+  # preprocessing / decoding options
+  source_prefix:
+    distribution: categorical
+    values: 
+      - "parse: "
+  constrain_generation:
+    distribution: categorical
+    values:
+      # - True
+      - False 
+  use_bilateral_predicate_marker:
+    distribution: categorical
+    values:
+      - True
+      # - False 
+  append_verb_form:
+    distribution: categorical
+    values:
+      - True
+      # - False 
+  predicate_marker_type:
+    distribution: categorical
+    values:
+      - generic
+      # - pred_type
+  preprocess_input_func:
+    distribution: categorical
+    values:
+      - input_predicate_marker
+      # - input_predicate_repeated
+  preprocess_output_func:
+    distribution: categorical
+    values:
+      - permutate_sample_num_of_qas
+      - permutate_sample_fixed
+      - all_shuffled
+      - permutate_all
+      # - all_random_order
+      - all_by_answer_ordering
+
+# technical model parameters (fixed)
+  learning_rate:
+    value: 0.001
+  dropout_rate:
+    value: 0.10
+  gradient_accumulation_steps:
+    value: 14
+  per_device_train_batch_size:
+    value: 12
+  num_beams:
+    value: 5
+  seed:
+    values: 
+      - 44
+      # - 63
+      # - 81
+  num_train_epochs:
+    value: 20
+  test_task:
+    values: 
+      - qanom
+      # - qasrl
+  qanom_joint_factor:
+    value: 14
+      
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - ${args}
+  # add params
+  - '--do_train'
+  - '--do_eval'
+  - '--report_to' 
+  - 'wandb'
+  - '--wandb_run_name' 
+  - 'linearization exp., joint' 
+  - '--overwrite_output_dir'
+  - '--predict_with_generate'
+  - '--fp16'
+  - '--load_best_model_at_end'
+  - '--do_eval_on' 
+  - 'validation'
+  - '--save_strategy' 
+  - 'steps'
+  - '--logging_strategy' 
+  - 'steps'
+  - '--evaluation_strategy' 
+  - 'steps'
+  - '--logging_steps' 
+  - 500
+  - '--eval_steps' 
+  - 500
+  - '--save_steps' 
+  - 500
+  - '--metric_for_best_model' 
+  - 'eval_loss'
+  - '--model_type' 
+  - 't5'
+  - '--output_dir' 
+  - '/home/nlp/kleinay/tmp/t5-tst-summarization/joint/linearization'
+  - '--model_name_or_path' 
+  - 't5-small'
+  # - '--dataset_name' 
+  # - 'biu-nlp/qanom'

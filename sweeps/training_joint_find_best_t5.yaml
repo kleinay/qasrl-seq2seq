@@ -1,0 +1,89 @@
+name: training joint model, test on qanom, search for best pretrained T5 small model
+method: grid
+metric:
+  name: Labled Arg f1
+  goal: maximize
+program: joint_train_experiment.py
+parameters:
+  model_name_or_path:
+    values: 
+      - t5-small
+      - google/t5-efficient-small-el32
+      - google/t5-efficient-small-el16
+      - google/t5-efficient-small-nl16
+      - google/t5-efficient-small-dm256
+      - google/t5-efficient-small
+      - google/t5-efficient-small-nl22
+      - google/t5-efficient-small-nl24
+  learning_rate:
+    values: 
+      - 0.001
+      # - 0.0005
+  dropout_rate:
+    value: 0.10
+  gradient_accumulation_steps:
+    value: 14
+  per_device_train_batch_size:
+    value: 12
+  seed:
+    values:
+      - 44
+  num_beams:
+    value: 3
+  num_train_epochs:
+    value: 7
+  source_prefix: 
+    distribution: categorical
+    values: 
+      - 'parse: '
+  test_task:
+    values: 
+      - qanom
+      # - qasrl
+  qanom_joint_factor:
+    values:
+      - 14
+
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - ${args}
+  # add params
+  - '--do_train'
+  - '--do_eval'
+  - '--report_to' 
+  - 'wandb'
+  - '--wandb_run_name' 
+  - 'qanom joint training sweep finer1' 
+  - '--overwrite_output_dir'
+  - '--predict_with_generate'
+  - '--append_verb_form'
+  - '--use_bilateral_predicate_marker'
+  - '--fp16'
+  - '--load_best_model_at_end'
+  - '--do_eval_on' 
+  - 'validation'
+  - '--save_strategy' 
+  - 'steps'
+  - '--logging_strategy' 
+  - 'steps'
+  - '--evaluation_strategy' 
+  - 'steps'
+  - '--logging_steps' 
+  - 500
+  - '--eval_steps' 
+  - 500
+  - '--save_steps' 
+  - 500
+  - '--metric_for_best_model' 
+  - 'eval_loss'
+  - '--predicate_marker_type' 
+  - 'generic'
+  - '--model_type' 
+  - 't5'
+  - '--preprocess_input_func' 
+  - 'input_predicate_marker'
+  - '--output_dir' 
+  - '/home/nlp/kleinay/tmp/t5-tst-summarization/qanom_joint/qanom_joint_sweep'

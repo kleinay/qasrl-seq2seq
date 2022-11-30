@@ -1,0 +1,82 @@
+name: generation parameters - temperature 
+method: random
+metric:
+  name: Labled Arg f1
+  goal: maximize
+program: run_summarization.py
+parameters:
+  wandb_run_name:
+    value: "Evaluate qanom sweep - temperature check"
+  model_name_or_path:
+    value: "trained_models/t5_qanom-joint-23.03.22"
+
+  constrain_generation:
+    value: false
+  do_sample:
+    value: true
+
+  num_beams:
+    values:
+      - 1
+      - 3
+  temperature:
+    values:
+      - 0.2
+      - 0.5
+      - 0.8
+      - 1
+      - 1.2
+      - 1.5
+      - 1.8
+  # diversity_penalty:
+  #   values:
+  #     - 0.2
+  #     - 0.5
+  #     - 0.8
+  #     - 1
+  #     - 1.2
+  #     - 1.5
+  #     - 1.8
+    
+
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - ${args}
+  # add params
+  - '--do_eval'
+  - '--report_to' 
+  - 'wandb' 
+  - '--predict_with_generate'
+  - '--append_verb_form'
+  - '--use_bilateral_predicate_marker'
+  - '--fp16'
+  - '--load_best_model_at_end'
+  - '--do_eval_on' 
+  - 'validation'
+  - '--save_strategy' 
+  - 'steps'
+  - '--logging_strategy' 
+  - 'steps'
+  - '--evaluation_strategy' 
+  - 'steps'
+  - '--logging_steps' 
+  - 500
+  - '--eval_steps' 
+  - 500
+  - '--save_steps' 
+  - 500
+  - '--metric_for_best_model' 
+  - 'eval_loss'
+  - '--predicate_marker_type' 
+  - 'generic'
+  - '--model_type' 
+  - 't5'
+  - '--preprocess_input_func' 
+  - 'input_predicate_marker'
+  - '--output_dir' 
+  - '/home/nlp/kleinay/tmp/t5-tst-summarization/qanom_joint/qanom_joint_inference_sweep'
+  - '--dataset_name' 
+  - 'biu-nlp/qanom'

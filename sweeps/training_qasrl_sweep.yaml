@@ -1,0 +1,82 @@
+name: training baseline qasrl finer sweep 1
+method: random
+metric:
+  name: Labled Arg f1
+  goal: maximize
+program: run_summarization.py
+parameters:
+  learning_rate:
+    distribution: log_uniform_values
+    max: 0.02
+    min: 0.002
+  dropout_rate:
+    distribution: uniform
+    max: 0.20
+    min: 0.05
+  gradient_accumulation_steps:
+    values:
+      - 4
+      - 8
+      - 12
+      - 16
+  per_device_train_batch_size:
+    value: 12
+  seed:
+    value: 44
+  num_beams:
+    value: 5
+  num_train_epochs:
+    values:
+      - 5
+      - 10
+  source_prefix: 
+    distribution: categorical
+    values: 
+      - 'parse: '
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - ${args}
+  # add params
+  - '--do_train'
+  - '--do_eval'
+  - '--report_to' 
+  - 'wandb'
+  - '--wandb_run_name' 
+  - 'qasrl baseline coarse training sweep' 
+  - '--overwrite_output_dir'
+  - '--predict_with_generate'
+  - '--append_verb_form'
+  - '--use_bilateral_predicate_marker'
+  - '--fp16'
+  - '--load_best_model_at_end'
+  - '--do_eval_on' 
+  - 'validation'
+  - '--save_strategy' 
+  - 'steps'
+  - '--logging_strategy' 
+  - 'steps'
+  - '--evaluation_strategy' 
+  - 'steps'
+  - '--logging_steps' 
+  - 1500
+  - '--eval_steps' 
+  - 1500
+  - '--save_steps' 
+  - 1500
+  - '--metric_for_best_model' 
+  - 'eval_loss'
+  - '--predicate_marker_type' 
+  - 'generic'
+  - '--model_type' 
+  - 't5'
+  - '--preprocess_input_func' 
+  - 'input_predicate_marker'
+  - '--output_dir' 
+  - '/home/nlp/kleinay/tmp/t5-tst-summarization/qasrl/qasrl_baseline_sweep'
+  - '--model_name_or_path' 
+  - 't5-small'
+  - '--dataset_name' 
+  - 'kleinay/qa_srl'

@@ -1,4 +1,4 @@
-from typing import Optional, Union, Iterable, List, Any
+from typing import Optional, Union, Iterable, List, Any, Dict, Tuple
 import itertools, math, random
 import pandas as pd
 import numpy as np
@@ -91,6 +91,14 @@ def split_by_indices(lst: List[Any], sep_indices: List[int]) -> List[List[Any]]:
 
 def strip_sequence(seq: torch.Tensor, val_to_strip: int = 0) -> torch.Tensor:
     return seq[seq!=val_to_strip]
+
+def arr_to_buckets(arr: Iterable[int], buckets: Dict[Tuple[int, int], str]):
+    def to_bucket(e):
+        for (start, end), label in buckets.items():
+            if e in list(range(start, end)):
+                return label
+        return None
+    return [to_bucket(e) for e in arr]
 
 def sample_permutations(lst: List[Any], k: int, with_replacement = False) -> List[List[Any]]:
     " Return a sample of `k` random permutations of `lst` "

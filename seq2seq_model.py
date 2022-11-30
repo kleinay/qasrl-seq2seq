@@ -455,10 +455,11 @@ class QASRLSeq2SeqModel(T5ForConditionalGeneration):
     
     # Other Seq2seq Utilities, not related to constrained beam search
     
-    def get_sequence_score(self, encoder_input_ids: torch.LongTensor, 
+    def get_sequence_score(self, 
+                           encoder_input_ids: torch.LongTensor, 
                            output_seq_ids: torch.LongTensor,
                            agg: Callable = torch.mean,
-                           **model_kwargs):
+                           **model_kwargs) -> float:
         """ Return the "confidnece" score of a given output sequence, as the minimum of token-wise posterior probailities. 
         See "Modeling Confidence in Sequence-to-Sequence Models" (https://aclanthology.org/W19-8671.pdf) for definition (\S 2.2).
         Assuming an encoder-decoder model. 
@@ -466,6 +467,25 @@ class QASRLSeq2SeqModel(T5ForConditionalGeneration):
         Args:
             encoder_input_ids (LongTensor): the input sequence (context) - 1D
             output_seq_ids (LongTensor): the output sequence for which we want to get the model's score - 1D, no trailing <pad>
+            agg (Callable): aggregation function for posterior probabilites
+            **model_kwargs: additional kwargs for model's forward method.
+        """
+        seq_probs = self.get_sequence_posteriors(encoder_input_ids, output_seq_ids, **model_kwargs)
+        agg_probs = agg(seq_probs)
+        return agg_probs
+        
+    def get_sequence_posteriors(self, 
+                                encoder_input_ids: torch.LongTensor,
+                                output_seq_ids: torch.LongTensor,
+                                **model_kwargs) -> torch.Tensor:
+        """ Return the token-wise posterior probabilities of a given output sequence (). 
+        See "Modeling Confidence in Sequence-to-Sequence Models" (https://aclanthology.org/W19-8671.pdf) for definition (\S 2.2).
+        Assuming an encoder-decoder model. 
+
+        Args:
+            encoder_input_ids (LongTensor): the input sequence (context) - 1D
+            output_seq_ids (LongTensor): the output sequence for which we want to get the model's score - 1D, no trailing <pad>
+            **model_kwargs: additional kwargs for model's forward method.
         """
         assert self.config.is_encoder_decoder, "This method is implemented only for encoder-decoder models"
         bos_token_id = self.config.bos_token_id
@@ -518,9 +538,10 @@ class QASRLSeq2SeqModel(T5ForConditionalGeneration):
         # If sequences_scores computed as, \sum_{t} \log p(y_{t} | x, y_{t<}) --- let's implement it by myself and extract it from `scores`
         scores = torch.stack(scores).squeeze(1)
         probabilities = torch.softmax(scores, dim=-1)
-        seq_probs = torch.tensor([prob[tok_id] for prob, tok_id in zip(probabilities, output_seq_ids)])
-        agg_probs = agg(seq_probs)
-        return agg_probs
+        seq_probs = torch.tensor([prob[tok_id] 
+                                  for prob, tok_id in zip(probabilities, output_seq_ids)])
+        return seq_probs
+
         
     
     

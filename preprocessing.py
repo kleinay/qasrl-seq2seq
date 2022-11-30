@@ -244,13 +244,14 @@ class Preprocessor:
         random.shuffle(qa_reprs)
         return [f"{self.special_tokens.separator_output_pairs}".join(qa_reprs)]
 
-    def extract_targets_by_answer_ordering(self, x: pd.DataFrame) -> str:
+    def extract_targets_by_role_ordering(self, x: pd.DataFrame) -> str:
         """
         Extracts ((question, answers), ...)
         """
         qas = list(zip(x.question, x.answer, x.answer_range))
         # sort QAs by Role (WH word of question) - 
-        RoleOrder = ["what", "who", "when", "where", "how", "why"] 
+        RoleOrder = ["what", "who", "when", "where", "how", "why"]
+        # RoleOrder = list(reversed(["what", "who", "when", "where", "how", "why"]))
         def sort_by_wh_word(triplet):
             q,a,ranges=triplet
             wh = q.split(' ')[0]
@@ -259,7 +260,7 @@ class Preprocessor:
         qa_reprs = [f"{q}{self.special_tokens.separator_output_question_answer}{self._flatten_answers(t)}" for q, t, _ in qas]
         return [f"{self.special_tokens.separator_output_pairs}".join(qa_reprs)]
     
-    def extract_targets_by_role_ordering(self, x: pd.DataFrame) -> str:
+    def extract_targets_by_answer_ordering(self, x: pd.DataFrame) -> str:
         """
         Extracts ((question, answers), ...)
         """

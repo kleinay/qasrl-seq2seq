@@ -1,15 +1,23 @@
 import logging
 from shutil import Error
 from typing import List, Tuple, Dict, Optional
+from dataclasses import dataclass
+from dataclasses_json import dataclass_json
 
 from datasets import Dataset
 from spacy.matcher.phrasematcher import PhraseMatcher
 
-from qasrl_gs.scripts.common import Role, Question, QuestionAnswer, STR_FORMAT_ANSWER_SEPARATOR
+from qasrl_gs.scripts.common import Role, Question, QuestionAnswer as OrigQASRLGSQuestionAnswer, STR_FORMAT_ANSWER_SEPARATOR
 from seq2seq_constrained_decoding.constrained_decoding.qasrl_constrained_decoding import get_qasrl_question_dfa
 from seq2seq_constrained_decoding.constrained_decoding.dfa import DFA
 from dfa_fill_qasrl_slots import dfa_fill_qasrl_slots, extract_is_negated, SLOT_TO_STATE
 QASRL_UNUSED_SLOT = "_"
+
+# extend OrigQASRLGSQuestionAnswer for our needs here
+@dataclass_json
+@dataclass
+class QuestionAnswer(OrigQASRLGSQuestionAnswer):
+    raw_question: str = ''  # keeps further information, since model's raw generated question separates question-slots   
 
 class S2SOutputError(Error):
     def __init__(self, *args: object, error_type='') -> None:
@@ -64,7 +72,8 @@ class StringsToObjectsParser:
                     # log that question is invalid w.r.t. QASRL format, but also keep QA in returned predicted QAs,
                     #  so that one can make use of the argument with the invalid (yet perhaps useful) questions
                     invalid_qa_pairs_strs.append(("Invalid QASRL question format", pair_str, sentence))
-                qa = QuestionAnswer(qasrl_id=qasrl_idx, verb_idx=predicate_idx, verb=predicate, question=clean_question_str,
+                qa = QuestionAnswer(qasrl_id=qasrl_idx, verb_idx=predicate_idx, verb=predicate, 
+                                    question=clean_question_str, raw_question=question_str,
                                           answer=arguments_str, answer_range=arguments_ranges_str, **question_slots)
                 questions_answers.append(qa)
             except S2SOutputError as e:

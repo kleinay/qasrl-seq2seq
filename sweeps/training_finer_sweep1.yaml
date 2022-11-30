@@ -1,0 +1,79 @@
+name: training baseline qanom finer sweep 1
+method: random
+metric:
+  name: Labled Arg f1
+  goal: maximize
+program: run_summarization.py
+parameters:
+  learning_rate:
+    distribution: uniform
+    max: 0.004
+    min: 0.001
+  dropout_rate:
+    distribution: uniform
+    max: 0.18
+    min: 0.07
+  gradient_accumulation_steps:
+    distribution: int_uniform
+    max: 8
+    min: 3
+  per_device_train_batch_size:
+    value: 12
+  seed:
+    value: 43
+  num_beams:
+    value: 3
+  num_train_epochs:
+    value: 30
+  source_prefix: 
+    distribution: categorical
+    values: 
+      - 'generate QAs: '
+      - 'parse: '
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - ${args}
+  # add params
+  - '--do_train'
+  - '--do_eval'
+  - '--report_to' 
+  - 'wandb'
+  - '--wandb_run_name' 
+  - 'qanom baseline training sweep finer1' 
+  - '--overwrite_output_dir'
+  - '--predict_with_generate'
+  - '--append_verb_form'
+  - '--use_bilateral_predicate_marker'
+  - '--fp16'
+  - '--load_best_model_at_end'
+  - '--do_eval_on' 
+  - 'validation'
+  - '--save_strategy' 
+  - 'steps'
+  - '--logging_strategy' 
+  - 'steps'
+  - '--evaluation_strategy' 
+  - 'steps'
+  - '--logging_steps' 
+  - 500
+  - '--eval_steps' 
+  - 500
+  - '--save_steps' 
+  - 500
+  - '--metric_for_best_model' 
+  - 'eval_loss'
+  - '--predicate_marker_type' 
+  - 'generic'
+  - '--model_type' 
+  - 't5'
+  - '--preprocess_input_func' 
+  - 'input_predicate_marker'
+  - '--output_dir' 
+  - '/home/nlp/kleinay/tmp/t5-tst-summarization/qanom/qanom_baseline_sweep'
+  - '--model_name_or_path' 
+  - 't5-small'
+  - '--dataset_name' 
+  - 'biu-nlp/qanom'

@@ -37,6 +37,52 @@ from notebook import *
 
 ## Actual Experiments:
 
+# train best single-domain models for cross-domain experiments
+
+best_hparams = {
+    "TQA": dict(
+        gradient_accumulation_steps=14,
+        learning_rate=0.005, 
+        dropout_rate=0.15,
+    ),
+    # "wikinews": dict(
+    #     gradient_accumulation_steps=8,
+    #     learning_rate=0.001, 
+    #     dropout_rate=0.10,
+    # ),
+    # "wikipedia": dict(
+    #     gradient_accumulation_steps=14,
+    #     learning_rate=0.005, 
+    #     dropout_rate=0.10,
+    # )   
+}
+
+for domain, hparams in best_hparams.items():
+    wandb_run_name=f"{now()} qasrl (large) trained on {domain} (eval on wikipedia test)"
+    full_experiment(model_type="t5",
+                    train_dataset="qasrl",
+                    training_domains=domain,
+                    validation_domains="wikipedia",
+                    test_domains="wikipedia",
+                    do_eval_on="test",
+                    train_epochs=20,
+                    batch_size=12,
+                    seed=44,
+                    source_prefix="parse: ",
+                    preprocess_input_func="input_predicate_marker",
+                    preprocess_output_func="all_by_answer_ordering",
+                    use_bilateral_predicate_marker=True,
+                    overwrite_output_dir=True,
+                    num_beams=5,
+                    logging_steps=500,
+                    eval_steps=500,
+                    save_steps=500,
+                    wandb_run_name=wandb_run_name,
+                    # max_train_samples=15079,
+                    dir_switch=f"qasrl/cross_domain/best/{domain}",
+                    description=f"optimal large qasrl {domain} model, based on grid sweep",
+                    **hparams
+                    )
 
 # for output_linearization in ["permutate_sample_fixed", "permutate_sample_num_of_qas", 
 #                              "all_shuffled", "all_by_answer_ordering", 
@@ -66,33 +112,61 @@ from notebook import *
 #                 description=f"best joint with output_linearization={output_linearization}, with best hyperparamters for 'by_answer_order' (5ep, accum=14, lr=.001) ",
 #                 )
 
-for output_linearization in ["permutate_sample_num_of_qas", "permutate_sample_fixed", 
-                             "all_by_answer_ordering", "all_shuffled", "permutate_all"]: # "all_shuffled", "all_by_answer_ordering",
-    wandb_run_name=f"{now()}_qasrl_baseline_small_{output_linearization}"
-    full_experiment(model_type="t5",
-                train_dataset="qasrl",
-                train_epochs=20,
-                batch_size=12,
-                gradient_accumulation_steps=8,
-                learning_rate=0.0125,
-                dropout_rate=0.06,
-                seed=44,
-                source_prefix="parse: ",
-                preprocess_input_func="input_predicate_marker",
-                preprocess_output_func=output_linearization, # "permutate_sample_fixed", "permutate_sample_num_of_qas", "permutate_all", "all_shuffled", "all_random_order", "all_by_answer_ordering"
-                use_bilateral_predicate_marker=True,
-                overwrite_output_dir=True,
-                num_beams=5,
-                logging_steps=500,
-                eval_steps=500,
-                save_steps=500,
-                wandb_run_name=wandb_run_name,
-                dir_switch=f"small_train/linearization/{output_linearization}",
-                limit_train_data=0.07,
-                # qanom_joint_factor=14,
-                description=f"qasrl baseline with output_linearization={output_linearization}, fixing permutation sampling memory overflow",
-                )
-
+# for output_linearization in ["permutate_sample_num_of_qas", "permutate_sample_fixed", 
+#                              "all_by_answer_ordering", "all_shuffled", "permutate_all"]: # "all_shuffled", "all_by_answer_ordering",
+# for output_linearization in ["all_by_role_ordering"]: 
+# output_linearization = "all_by_role_ordering" 
+    # wandb_run_name=f"{now()} joint, {output_linearization} - on qanom test"
+    # full_experiment(model_type="t5",
+    #             train_dataset="joint_qanom",
+    #             train_epochs=20,
+    #             batch_size=12,
+    #             gradient_accumulation_steps=14,
+    #             learning_rate=0.001,
+    #             dropout_rate=0.1,
+    #             seed=44,
+    #             do_eval_on="test",
+    #             source_prefix="parse: ",
+    #             preprocess_input_func="input_predicate_marker",
+    #             preprocess_output_func=output_linearization, # "permutate_sample_fixed", "permutate_sample_num_of_qas", "permutate_all", "all_shuffled", "all_random_order", "all_by_answer_ordering"
+    #             use_bilateral_predicate_marker=True,
+    #             overwrite_output_dir=True,
+    #             num_beams=5,
+    #             logging_steps=500,
+    #             eval_steps=500,
+    #             save_steps=500,
+    #             wandb_run_name=wandb_run_name,
+    #             # dir_switch=f"debug/{output_linearization}",
+    #             dir_switch=f"lin-{output_linearization}",
+    #             # limit_train_data=0.07,
+    #             qanom_joint_factor=14,
+    #             description=f"joint with output_linearization={output_linearization}",
+    #             )
+    # model_dir=f"/home/nlp/kleinay/tmp/t5-tst-summarization/joint_qanom/lin-{output_linearization}"              
+    # load_and_evaluate(model_dir,
+    #                 test_dataset = "qanom",
+    #                 output_dir=None, 
+    #                 wandb_run_name=f"evaluate joint {output_linearization} on qanom test",
+    #                 # wandb_run_name=f"debug evaluate",
+    #                 do_eval_on_dev=False,
+    #                 evaluation_protocol="qanom",
+    #                 constrain_generation=False,
+    #                 # limit_eval_data=0.05,
+    #                 batch_size=12,
+    #                 num_beams=5,
+    #                 )
+    # load_and_evaluate(model_dir,
+    #                 test_dataset = "qasrl",
+    #                 output_dir=None, 
+    #                 wandb_run_name=f"evaluate joint {output_linearization} on qasrl test",
+    #                 # wandb_run_name=f"debug evaluate",
+    #                 do_eval_on_dev=False,
+    #                 evaluation_protocol="qanom",
+    #                 constrain_generation=False,
+    #                 # limit_eval_data=0.05,
+    #                 batch_size=12,
+    #                 num_beams=5,
+    #                 )
 
 # optimal qasrl-baseline based on sweep:
 # wandb_run_name=f"{now()}_t5_baseline_qasrl_small"
@@ -121,19 +195,20 @@ for output_linearization in ["permutate_sample_num_of_qas", "permutate_sample_fi
 
 # #%%  best joint model so far
 # for learn_predicate_type in [None, "pre", "post"]:
-# model_type = "t5"
-# epochs=5
-# wandb_run_name=f"{now()}_{epochs}ep_{model_type}_joint_qanom_append-verb=False"
+# model_type = "t5-base"
+# epochs=20
+# wandb_run_name=f"{now()}_{epochs}ep_{model_type}_joint-qanom answer-order dev"
 # full_experiment(model_type=model_type,
 #                     train_dataset="joint_qanom",
 #                     train_epochs=epochs,
-#                     batch_size=12,
+#                     batch_size=4,
+#                     gradient_checkpointing=True,
 #                     # learn_predicate_type=learn_predicate_type,
-#                     gradient_accumulation_steps=14,
+#                     gradient_accumulation_steps=42,
 #                     learning_rate=0.001,
 #                     dropout_rate=0.1,
 #                     seed=44,
-#                     append_verb_form=False,
+#                     append_verb_form=True,
 #                     source_prefix="parse: ",
 #                     preprocess_input_func="input_predicate_marker",
 #                     use_bilateral_predicate_marker=True,
@@ -143,9 +218,11 @@ for output_linearization in ["permutate_sample_num_of_qas", "permutate_sample_fi
 #                     eval_steps=500,
 #                     save_steps=500,
 #                     wandb_run_name=wandb_run_name,
-#                     dir_switch="joint/no-append-verbform",
+#                     preprocess_output_func="all_by_answer_ordering", # "permutate_sample_fixed", "permutate_sample_num_of_qas", "permutate_all", "all_shuffled", "all_random_order", "all_by_answer_ordering"
+#                     do_eval_on="validation",
+#                     # dir_switch="j",
 #                     qanom_joint_factor=14,
-#                     description="""best joint, but with append_verb_form=False""",
+#                     description="""t5-base using best joint of t5-small hparams, answer-ordering""",
 #                     )
     
   

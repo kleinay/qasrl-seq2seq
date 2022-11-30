@@ -24,7 +24,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field, astuple
-from typing import Literal, Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple
 from datasets.arrow_dataset import Dataset
 from datasets.dataset_dict import DatasetDict
 
@@ -57,7 +57,7 @@ from transformers.utils.versions import require_version
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 from preprocessing import Preprocessor
 from pipeline import get_markers_for_model
-from qasrl_gs.scripts.common import QuestionAnswer
+from strings_to_objects_parser import QuestionAnswer
 import utils
 from utils import (df_to_row_list, setup_wandb, replaceKeys, stack_rows, str2num, 
                    without_prefix, without_suffix, duplicate_by_per_element_factor)
@@ -208,6 +208,15 @@ class DataTrainingArguments:
     dataset_config_name: Optional[str] = field(
         default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
     )
+    training_domains: Optional[str] = field(
+        default=None, metadata={"help": "specify a specific domain or domains (comma separated) for the training set"}
+    )
+    validation_domains: Optional[str] = field(
+        default=None, metadata={"help": "specify a specific domain or domains (comma separated) for the validation set"}
+    )
+    test_domains: Optional[str] = field(
+        default=None, metadata={"help": "specify a specific domain or domains (comma separated) for the test set"}
+    )  
     text_column: Optional[str] = field(
         default=None,
         metadata={"help": "The name of the column in the datasets containing the full texts (for summarization)."},
@@ -459,15 +468,30 @@ def main():
             raise ValueError(f"dataset {dataset_name.strip()} is not supported shen setting predicate_type feature")
         return predicate_type
     
-    def load_dataset_with_predicate_type(dataset_name, split) -> Dataset:
-        dataset = load_dataset(dataset_name.strip(), data_args.dataset_config_name, cache_dir=model_args.cache_dir)[split]
+    def get_dataset_config_kwargs_for_selecting_domains(split):
+        if split == "train" and data_args.training_domains:
+            domains = data_args.training_domains.split(",")
+            return {"domains": domains}
+        if split == "validation" and data_args.validation_domains:
+            domains = data_args.validation_domains.split(",")
+            return {"domains": domains}
+        if split == "test" and data_args.test_domains:
+            domains = data_args.test_domains.split(",")
+            return {"domains": domains}
+        return dict()
+    
+    def load_dataset_with_predicate_type(dataset_name, split, **config_kwargs) -> Dataset:
+        dataset_dict = load_dataset(dataset_name.strip(), data_args.dataset_config_name, cache_dir=model_args.cache_dir, **config_kwargs)
+        if split not in dataset_dict:
+            return None
+        dataset = dataset_dict[split]
         predicate_type = get_predicate_type_label_from_dataset_name(dataset_name)
         dataset = dataset.add_column("predicate_type", [predicate_type]*len(dataset))
         return dataset
 
-    def load_dataset_dict_with_predicate_type(dataset_name) -> DatasetDict:
+    def load_dataset_dict_with_predicate_type(dataset_name, **config_kwargs) -> DatasetDict:
         predicate_type = get_predicate_type_label_from_dataset_name(dataset_name)
-        dataset_dict = load_dataset(dataset_name.strip(), data_args.dataset_config_name, cache_dir=model_args.cache_dir)
+        dataset_dict = load_dataset(dataset_name.strip(), data_args.dataset_config_name, cache_dir=model_args.cache_dir, **config_kwargs)
         dataset_dict = {split: dataset.add_column("predicate_type", [predicate_type]*len(dataset))
                         for split, dataset in dataset_dict.items()}
         return dataset_dict    
@@ -506,8 +530,9 @@ def main():
             datasets_loaded_per_split = {}
             for spl, dataset_specs in dataset_factor_and_name_per_split.items():
                 loaded_datasets = []
+                config_kwargs = get_dataset_config_kwargs_for_selecting_domains(spl)
                 for factor, name in dataset_specs:
-                    dataset: Dataset = load_dataset_with_predicate_type(name, spl)
+                    dataset: Dataset = load_dataset_with_predicate_type(name, spl, **config_kwargs)
                     if isinstance(factor, int):
                         dupl_dataset = datasets.concatenate_datasets([dataset] * factor, info=dataset.info)
                     else: # isinstance(facotr, float):
@@ -519,7 +544,15 @@ def main():
                 split: datasets.concatenate_datasets(source_datasets, info=source_datasets[0].info)
                 for split, source_datasets in datasets_loaded_per_split.items()
             })
-            
+        
+        # domain selection options
+        elif data_args.training_domains or data_args.validation_domains or data_args.test_domains:
+            required_domains = ({"train", "validation"} if training_args.do_train else set())  | \
+                               ({data_args.do_eval_on} if training_args.do_eval else set())  | \
+                               ({"test"} if training_args.do_predict else set()) 
+            raw_datasets = {split: load_dataset_with_predicate_type(data_args.dataset_name, split, 
+                                                **get_dataset_config_kwargs_for_selecting_domains(split))
+                            for split in required_domains}
         # Downloading and loading a single dataset from the hub.
         else:
             raw_datasets = load_dataset_dict_with_predicate_type(data_args.dataset_name)
@@ -1132,6 +1165,9 @@ def main():
         predicted_QAs: List[QuestionAnswer]
         invalid_qa_subseqs: List[str] 
         predicted_QAs, invalid_qa_subseqs = strings_to_objects_parser.to_qasrl_gs_csv_format(dataset, predictions)
+        if len(predicted_QAs) == 0:
+            logger.warning("No valid predictions!")
+            return pd.DataFrame()
         
         # Log invalid output sequences
         overall_n_qa_subseqs = n_QAs_per_instance.sum() # len(predicted_QAs) + len(invalid_qa_subseqs)
@@ -1178,6 +1214,8 @@ def main():
                     
         # Save parsed predictions in qasrl csv format                     
         df_parsed_predictions = pd.DataFrame([x.to_dict() for x in predicted_QAs])
+        df_parsed_predictions['qa_position'] = df_parsed_predictions.groupby(["qasrl_id", "verb_idx"]).cumcount()
+
         if len(df_parsed_predictions)>0 and "sentence" in dataset.column_names:
             qasrl_id2sent = {r["qasrl_id"]:r["sentence"] for r in dataset}
             df_parsed_predictions['sentence'] = df_parsed_predictions['qasrl_id'].apply(qasrl_id2sent.get) # dataset['qasrl_id']
@@ -1268,6 +1306,10 @@ def main():
             
             
             df_gold = pd.DataFrame(orig_evaluation_dataset)
+            # add info about position of QA in sequence (only for analysis)
+            df_gold['qa_position'] = df_gold.groupby(["sent_id", "predicate_idx"]).cumcount()
+            df_parsed_predictions['qa_position'] = df_parsed_predictions.groupby(["qasrl_id", "verb_idx"]).cumcount()
+
             eval_protocol = data_args.evaluation_protocol
             # TODO Future: support both evaluation protocols simultanously
             if "qasrl" == eval_protocol:   # follow qasrl-gs protocol

@@ -27,11 +27,11 @@ There are two recommneded ways to run a training experiment, in which you can se
 ### Option-1: `full_experiment` function
 
 Inside `notebook.py` there is the `full_experiment` function.  
-This function basically prepares the desired arguments for the `run_parsing_mode` script based on more simple parameters. It also wraps it with `wandb` utilities for logging the experiment. You can specify any seq2seq model from Huggingface Model Hub as `model_type`.
+This function basically prepares the desired arguments for the `run_parsing_model` script based on more simple parameters. It also wraps it with `wandb` utilities for logging the experiment. You can specify any seq2seq model from Huggingface Model Hub as `model_type` (though the repo is maintained mainly for T5 type of models).
 
 ### Option-2: Through WandB sweeps
 
-Commonly it is desired to run a series of training experiments with different hyperparamters, for tuning those hyperparamters to maxmize performance. In this project we use WandB and its [sweep utility](https://docs.wandb.ai/guides/sweeps) for performing hyperparamter search and other experiments.
+Commonly it is desired to run a series of training experiments with different hyperparamters, for tuning those hyperparamters to maxmize performance on the validation set (`do_eval_on=validation`). In this project we use WandB and its [sweep utility](https://docs.wandb.ai/guides/sweeps) for performing hyperparamter search and other experiments.
 A sweep (i.e. one hyperparameter search experiment) is defined by a YAML file - you can find some examples in the `sweeps/` directory.
 
 To run a sweep, run:

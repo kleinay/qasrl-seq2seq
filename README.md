@@ -20,6 +20,8 @@ This repository contains code for our experiments and analysis in the paper "QAS
 * `QANom` - used for evaluation of the results, according to Klein et al., 2020. We call this "qanom evaluation methodology" throughout the repo.
 * `seq2seq_constrained_decoding` - was used in some preliminary experiments to constrain model generation according to QASRL output sequence format. We end up not using constrained decoding as it introduced noise related to the mismtach between words and tokens. The Deterministic Finite Autmoata (`DFA`) defining QASRL question format is still being used in `dfa_fill_qasrl_slots.py` for analyzing the question format (i.e. decomposing the outout question string into the 7-slot template defining a valid QASRL question).
 
+Make sure to init and update all submodules --- they are required for the `run_parsing_model.py` script to run properly. You can use the `--recurse-submodules` switch in the `git clone` command, or alternatively run `git submodule update --init --recursive` after cloning.
+
 ## Training New Models
 
 There are two recommneded ways to run a training experiment, in which you can select a certain set of hyperparameters (including training dataset, pretrained model, and various modeling-related options), train (=fine-tune) a new model, and then evaluate it on the dev or test set.

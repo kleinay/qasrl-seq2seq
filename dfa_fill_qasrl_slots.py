@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Union
 
-from seq2seq_constrained_decoding.constrained_decoding.dfa import DFA
+from constrained_decoding.dfa import DFA
 
 STATE_TO_SLOT = {
     0: "wh",

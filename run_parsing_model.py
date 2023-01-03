@@ -1076,10 +1076,10 @@ def main():
 
     # Prepare constrained generation
     if model_args.constrain_generation:
-        from seq2seq_constrained_decoding.constrained_decoding.dfa import DFA
-        from seq2seq_constrained_decoding.constrained_decoding.qasrl_constrained_decoding import (
+        from constrained_decoding.dfa import DFA
+        from constrained_decoding.qasrl import (
             get_qasrl_full_sequence_dfa, set_as_redundance_answer_disposer_dfa)
-        from seq2seq_constrained_decoding.constrained_decoding.dfa_decoding import set_decoding_to_dfa_constrained
+        from constrained_decoding.autoregressive_dfa_constraining import set_decoding_to_dfa_constrained
         
         # Define DFA factory based on input's token_ids  
         def dfa_factory(token_ids): 

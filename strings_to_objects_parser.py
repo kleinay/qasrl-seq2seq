@@ -8,8 +8,8 @@ from datasets import Dataset
 from spacy.matcher.phrasematcher import PhraseMatcher
 
 from qasrl_gs.scripts.common import Role, Question, QuestionAnswer as OrigQASRLGSQuestionAnswer, STR_FORMAT_ANSWER_SEPARATOR
-from seq2seq_constrained_decoding.constrained_decoding.qasrl_constrained_decoding import get_qasrl_question_dfa
-from seq2seq_constrained_decoding.constrained_decoding.dfa import DFA
+from constrained_decoding.qasrl import get_qasrl_question_dfa
+from constrained_decoding.dfa import DFA
 from dfa_fill_qasrl_slots import dfa_fill_qasrl_slots, extract_is_negated, SLOT_TO_STATE
 QASRL_UNUSED_SLOT = "_"
 

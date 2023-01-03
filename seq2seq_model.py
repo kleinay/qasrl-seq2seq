@@ -35,10 +35,10 @@ import warnings
 import numpy as np
 
 import itertools       
-from seq2seq_constrained_decoding.constrained_decoding.dfa import DFA 
-from seq2seq_constrained_decoding.constrained_decoding.dfa_constrained_generate import dfa_constrained_generate 
+from constrained_decoding.dfa import DFA 
+from constrained_decoding.autoregressive_dfa_constraining import dfa_constrained_generate 
     
-    
+
 
 class QASRLSeq2SeqModel(T5ForConditionalGeneration):
     BRANCHING_STRATEGIES = (

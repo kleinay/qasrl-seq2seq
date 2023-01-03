@@ -1,6 +1,6 @@
 
-# from qasrl_constrained_decodingseq2seq_constrained_decoding.constrained_decoding.qasrl_constrained_decoding import get_qasrl_question_dfa
-from seq2seq_constrained_decoding.constrained_decoding.qasrl_constrained_decoding import get_qasrl_question_dfa
+# from qasrl_constrained_decodingconstrained_decoding.qasrl import get_qasrl_question_dfa
+from constrained_decoding.qasrl import get_qasrl_question_dfa
 from dfa_fill_qasrl_slots import dfa_fill_qasrl_slots
 
 
